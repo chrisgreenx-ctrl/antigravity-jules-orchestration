@@ -84,7 +84,8 @@ app.get('/', (req, res) => {
   res.json({
     status: 'healthy',
     service: 'Jules MCP Server',
-    version: '1.2.0',
+    version: '1.3.1',
+    deployedBy: 'Gemini',
     capabilities: ['sessions', 'tasks', 'orchestration', 'mcp-protocol'],
     timestamp: new Date().toISOString()
   });
@@ -104,7 +105,7 @@ app.get(['/health', '/api/v1/health'], async (req, res) => {
   
   res.json({ 
     status: 'ok',
-    version: '1.2.0',
+    version: '1.3.1',
     services: {
       database: dbStatus,
       julesApi: 'configured',
@@ -157,6 +158,7 @@ app.get('/mcp/tools', (req, res) => {
 
 // MCP Tool Execution
 app.post('/mcp/execute', async (req, res) => {
+  console.log('MCP Execution Request Body:', JSON.stringify(req.body));
   const { name, arguments: args, tool, parameters } = req.body;
   
   // Support both MCP formats
@@ -164,7 +166,8 @@ app.post('/mcp/execute', async (req, res) => {
   const toolArgs = args || parameters || {};
   
   if (!toolName) {
-    return res.status(400).json({ error: 'Tool name required (use "name" or "tool" field)' });
+    console.error('MCP Error: Missing tool name in', req.body);
+    return res.status(400).json({ error: 'Tool name required (use "name" or "tool" field)', received: req.body });
   }
   
   try {
