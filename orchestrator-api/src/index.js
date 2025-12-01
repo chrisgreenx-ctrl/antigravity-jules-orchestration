@@ -4,7 +4,6 @@ import pg from 'pg';
 import axios from 'axios';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
-import { GoogleAuth } from 'google-auth-library';
 import * as metrics from './metrics.js';
 
 const app = express();
@@ -31,11 +30,6 @@ app.get('/api/v1/metrics', async (req, res) => {
   res.end(await metrics.getMetrics());
 });
 
-// Initialize Google Auth
-const auth = new GoogleAuth({
-  scopes: 'https://www.googleapis.com/auth/cloud-platform'
-});
-
 // Jules API client
 const julesClient = axios.create({
   baseURL: 'https://jules.googleapis.com/v1alpha',
@@ -44,24 +38,13 @@ const julesClient = axios.create({
   }
 });
 
-// Add auth interceptor
-julesClient.interceptors.request.use(async (config) => {
-  try {
-    const client = await auth.getClient();
-    const headers = await client.getRequestHeaders();
-    
-    if (!headers.Authorization && JULES_API_KEY) {
-        config.headers.Authorization = `Bearer ${JULES_API_KEY}`;
-    } else {
-        config.headers.Authorization = headers.Authorization;
-    }
-    
-    console.log(`[Jules Client] Requesting ${config.url} with Auth`);
-    return config;
-  } catch (error) {
-    console.error('[Jules Client] Auth Error:', error.message);
-    return Promise.reject(error);
+// Add auth interceptor (Simplified for Debugging)
+julesClient.interceptors.request.use((config) => {
+  if (JULES_API_KEY) {
+    config.headers.Authorization = 'Bearer ' + JULES_API_KEY;
   }
+  console.log('[Jules Client] Requesting ' + config.url + ' with simplified Auth');
+  return config;
 });
 
 // GitHub API client
@@ -84,7 +67,7 @@ app.get('/', (req, res) => {
   res.json({
     status: 'healthy',
     service: 'Jules MCP Server',
-    version: '1.3.2',
+    version: '1.3.3-debug',
     deployedBy: 'Gemini',
     capabilities: ['sessions', 'tasks', 'orchestration', 'mcp-protocol'],
     timestamp: new Date().toISOString()
@@ -105,7 +88,7 @@ app.get(['/health', '/api/v1/health'], async (req, res) => {
   
   res.json({ 
     status: 'ok',
-    version: '1.3.2',
+    version: '1.3.3-debug',
     services: {
       database: dbStatus,
       julesApi: 'configured',
@@ -158,10 +141,7 @@ app.get('/mcp/tools', (req, res) => {
 
 // MCP Tool Execution
 app.post('/mcp/execute', async (req, res) => {
-  // LOGGING: Debug the request body
-  console.log('MCP Execution Request Headers:', req.headers);
   console.log('MCP Execution Request Body:', JSON.stringify(req.body));
-
   const { name, arguments: args, tool, parameters } = req.body;
   
   // Support both MCP formats
@@ -230,6 +210,28 @@ function broadcast(data) {
   });
 }
 
+// Workflow Status Endpoint
+app.get('/api/v1/workflows/:id', async (req, res) => {
+  if (!db) {
+    return res.status(503).json({ error: 'Database not configured' });
+  }
+  
+  try {
+    const workflow = await db.query(
+      'SELECT * FROM workflow_instances WHERE id = $1',
+      [req.params.id]
+    );
+    
+    if (!workflow.rows.length) {
+      return res.status(404).json({ error: 'Workflow not found' });
+    }
+    
+    res.json(workflow.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GitHub Webhook Receiver
 app.post('/api/v1/webhooks/github', async (req, res) => {
   const event = req.headers['x-github-event'];
@@ -248,5 +250,5 @@ app.post('/api/v1/webhooks/github', async (req, res) => {
 // Start server
 server.listen(PORT, () => {
   console.log('Jules Orchestrator API running on port ' + PORT);
-  console.log('Version: 1.3.2');
+  console.log('Version: 1.3.3-debug');
 });
