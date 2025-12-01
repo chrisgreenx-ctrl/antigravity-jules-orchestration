@@ -1,14 +1,18 @@
-# orchestrator-api/Dockerfile
+# Use Node.js LTS
 FROM node:20-alpine
 
-WORKDIR /app
+# Set working directory
+WORKDIR /usr/src/app
 
+# Install dependencies first (caching)
 COPY package*.json ./
-# Use npm install to avoid package-lock sync issues during rapid dev
-RUN npm install --production
+RUN npm install --omit=dev
 
+# Copy source
 COPY src/ ./src/
 
+# Expose port
 EXPOSE 3000
 
+# Start command
 CMD ["node", "src/index.js"]
