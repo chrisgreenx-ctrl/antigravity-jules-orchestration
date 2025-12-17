@@ -38,7 +38,7 @@ jobs:
             exit 1
           fi
 
-          if echo "$response" | grep -q '"apiKeyConfigured":true'; then
+          if echo "$response" | grep -q '"julesApi":"configured'; then
             echo "✅ API key is configured"
           else
             echo "❌ API key is not configured"
