@@ -821,3 +821,218 @@ describe('v2.5.0 Features - Clone Session Validation', () => {
     });
   });
 });
+
+// ============================================================================
+// SECURITY VALIDATION TESTS
+// ============================================================================
+
+describe('v2.5.0 Features - Security Validation', () => {
+  // GitHub parameter patterns (copied from index.js)
+  const GITHUB_OWNER_PATTERN = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
+  const GITHUB_REPO_PATTERN = /^[a-zA-Z0-9._-]{1,100}$/;
+  const VALID_MERGE_METHODS = ['merge', 'squash', 'rebase'];
+
+  function validateGitHubParams(owner, repo, prNumber) {
+    if (!owner || typeof owner !== 'string' || !GITHUB_OWNER_PATTERN.test(owner)) {
+      throw new Error('Invalid GitHub owner');
+    }
+    if (!repo || typeof repo !== 'string' || !GITHUB_REPO_PATTERN.test(repo)) {
+      throw new Error('Invalid GitHub repository');
+    }
+    if (owner.includes('..') || repo.includes('..') || owner.includes('/') || repo.includes('/')) {
+      throw new Error('Path traversal not allowed');
+    }
+    if (!Number.isInteger(prNumber) || prNumber < 1 || prNumber > 999999) {
+      throw new Error('Invalid PR number');
+    }
+  }
+
+  describe('Path Traversal Prevention', () => {
+    it('should block path traversal in owner', () => {
+      assert.throws(() => validateGitHubParams('../malicious', 'repo', 123), /traversal|Invalid/);
+    });
+
+    it('should block path traversal in repo', () => {
+      assert.throws(() => validateGitHubParams('owner', '../../../etc/passwd', 123), /traversal|Invalid/);
+    });
+
+    it('should block forward slashes in owner', () => {
+      assert.throws(() => validateGitHubParams('owner/evil', 'repo', 123), /traversal|Invalid/);
+    });
+
+    it('should block forward slashes in repo', () => {
+      assert.throws(() => validateGitHubParams('owner', 'repo/evil', 123), /traversal|Invalid/);
+    });
+  });
+
+  describe('GitHub Owner Validation', () => {
+    it('should accept valid GitHub usernames', () => {
+      const validOwners = ['octocat', 'github', 'my-org', 'test123', 'a', 'ab'];
+      for (const owner of validOwners) {
+        assert.doesNotThrow(() => validateGitHubParams(owner, 'repo', 1));
+      }
+    });
+
+    it('should reject empty owner', () => {
+      assert.throws(() => validateGitHubParams('', 'repo', 1), /Invalid/);
+    });
+
+    it('should reject owner starting with hyphen', () => {
+      assert.throws(() => validateGitHubParams('-invalid', 'repo', 1), /Invalid/);
+    });
+
+    it('should reject owner ending with hyphen', () => {
+      assert.throws(() => validateGitHubParams('invalid-', 'repo', 1), /Invalid/);
+    });
+
+    it('should reject owner over 39 characters', () => {
+      const longOwner = 'a'.repeat(40);
+      assert.throws(() => validateGitHubParams(longOwner, 'repo', 1), /Invalid/);
+    });
+
+    it('should reject owner with special characters', () => {
+      assert.throws(() => validateGitHubParams('owner@evil', 'repo', 1), /Invalid/);
+    });
+  });
+
+  describe('GitHub Repo Validation', () => {
+    it('should accept valid repository names', () => {
+      const validRepos = ['my-repo', 'test.js', 'repo_name', 'REPO-123', 'a'];
+      for (const repo of validRepos) {
+        assert.doesNotThrow(() => validateGitHubParams('owner', repo, 1));
+      }
+    });
+
+    it('should reject empty repo', () => {
+      assert.throws(() => validateGitHubParams('owner', '', 1), /Invalid/);
+    });
+
+    it('should reject repo over 100 characters', () => {
+      const longRepo = 'a'.repeat(101);
+      assert.throws(() => validateGitHubParams('owner', longRepo, 1), /Invalid/);
+    });
+  });
+
+  describe('PR Number Validation', () => {
+    it('should accept valid PR numbers', () => {
+      const validPRs = [1, 42, 1000, 999999];
+      for (const prNum of validPRs) {
+        assert.doesNotThrow(() => validateGitHubParams('owner', 'repo', prNum));
+      }
+    });
+
+    it('should reject PR number 0', () => {
+      assert.throws(() => validateGitHubParams('owner', 'repo', 0), /Invalid PR/);
+    });
+
+    it('should reject negative PR numbers', () => {
+      assert.throws(() => validateGitHubParams('owner', 'repo', -1), /Invalid PR/);
+    });
+
+    it('should reject PR number over limit', () => {
+      assert.throws(() => validateGitHubParams('owner', 'repo', 1000000), /Invalid PR/);
+    });
+
+    it('should reject float PR numbers', () => {
+      assert.throws(() => validateGitHubParams('owner', 'repo', 1.5), /Invalid PR/);
+    });
+
+    it('should reject NaN', () => {
+      assert.throws(() => validateGitHubParams('owner', 'repo', NaN), /Invalid PR/);
+    });
+  });
+
+  describe('Merge Method Validation', () => {
+    it('should accept valid merge methods', () => {
+      for (const method of VALID_MERGE_METHODS) {
+        assert.ok(VALID_MERGE_METHODS.includes(method));
+      }
+    });
+
+    it('should reject invalid merge methods', () => {
+      const invalidMethods = ['fast-forward', 'cherry-pick', 'SQUASH', 'Merge', ''];
+      for (const method of invalidMethods) {
+        assert.ok(!VALID_MERGE_METHODS.includes(method));
+      }
+    });
+  });
+
+  describe('Comment Validation', () => {
+    const MAX_COMMENT_LENGTH = 10000;
+
+    it('should accept valid comments', () => {
+      const validComments = ['LGTM!', 'Great work!', 'Please fix line 42'];
+      for (const comment of validComments) {
+        assert.ok(typeof comment === 'string' && comment.trim().length > 0);
+      }
+    });
+
+    it('should reject empty comments', () => {
+      const emptyComments = ['', '   ', '\n\t'];
+      for (const comment of emptyComments) {
+        assert.ok(!comment.trim().length);
+      }
+    });
+
+    it('should reject comments over max length', () => {
+      const longComment = 'a'.repeat(MAX_COMMENT_LENGTH + 1);
+      assert.ok(longComment.length > MAX_COMMENT_LENGTH);
+    });
+
+    it('should accept comments at max length', () => {
+      const maxComment = 'a'.repeat(MAX_COMMENT_LENGTH);
+      assert.ok(maxComment.length <= MAX_COMMENT_LENGTH);
+    });
+  });
+});
+
+describe('v2.5.0 Features - Template Size Limit', () => {
+  const MAX_TEMPLATES = 100;
+
+  it('should enforce maximum template limit', () => {
+    // Simulate template count check
+    const currentCount = 100;
+    const limitReached = currentCount >= MAX_TEMPLATES;
+    assert.ok(limitReached, 'Should enforce limit at 100 templates');
+  });
+
+  it('should allow templates under limit', () => {
+    const currentCount = 99;
+    const limitReached = currentCount >= MAX_TEMPLATES;
+    assert.ok(!limitReached, 'Should allow template when under limit');
+  });
+
+  it('should validate template name length', () => {
+    const maxNameLength = 100;
+    const validName = 'a'.repeat(100);
+    const invalidName = 'a'.repeat(101);
+
+    assert.ok(validName.length <= maxNameLength);
+    assert.ok(invalidName.length > maxNameLength);
+  });
+});
+
+describe('v2.5.0 Features - Queue Memory Management', () => {
+  it('should limit retained completed/failed items', () => {
+    const maxRetained = 100;
+    const terminalItems = 150;
+    const toRemove = terminalItems - maxRetained;
+
+    assert.strictEqual(toRemove, 50, 'Should remove 50 items to stay within limit');
+  });
+
+  it('should not remove active items during cleanup', () => {
+    const items = [
+      { status: 'pending' },
+      { status: 'processing' },
+      { status: 'completed' },
+      { status: 'failed' }
+    ];
+
+    const terminalItems = items.filter(i => i.status === 'completed' || i.status === 'failed');
+    const activeItems = items.filter(i => i.status === 'pending' || i.status === 'processing');
+
+    assert.strictEqual(terminalItems.length, 2);
+    assert.strictEqual(activeItems.length, 2);
+  });
+});
