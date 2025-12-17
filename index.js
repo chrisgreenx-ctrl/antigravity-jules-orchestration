@@ -86,7 +86,7 @@ let batchProcessor = null;
 let sessionMonitor = null;
 
 // CORS - Secure whitelist configuration
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5173,https://antigravity-jules-orchestration.onrender.com').split(',');
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5173,https://scarmonit.com,https://www.scarmonit.com,https://antigravity-jules-orchestration.onrender.com').split(',');
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;

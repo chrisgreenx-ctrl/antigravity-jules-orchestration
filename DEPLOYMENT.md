@@ -4,7 +4,7 @@
 
 ✅ **LIVE & FULLY OPERATIONAL**
 
-- **Service URL**: https://antigravity-jules-orchestration.onrender.com
+- **Service URL**: https://scarmonit.com
 - **Deployment Platform**: Render (Free Tier)
 - **Region**: Oregon (US West)
 - **Runtime**: Node.js 22.16.0
@@ -51,7 +51,7 @@
 ## 🔍 Health Check Endpoints
 
 ### Root Endpoint: `/`
-**URL**: https://antigravity-jules-orchestration.onrender.com
+**URL**: https://scarmonit.com
 
 **Response**:
 ```json
@@ -64,7 +64,7 @@
 ```
 
 ### Health Check: `/health`
-**URL**: https://antigravity-jules-orchestration.onrender.com/health
+**URL**: https://scarmonit.com/health
 
 **Response**:
 ```json
@@ -96,7 +96,7 @@ To integrate this deployed service with Google Antigravity browser automation:
    {
      "mcpServers": {
        "jules-orchestration": {
-         "url": "https://antigravity-jules-orchestration.onrender.com",
+         "url": "https://scarmonit.com",
          "apiKey": "YOUR_JULES_API_KEY",
          "protocol": "https"
        }
@@ -105,13 +105,13 @@ To integrate this deployed service with Google Antigravity browser automation:
    ```
 
 2. **Antigravity Browser Settings**:
-   - Set MCP endpoint: `https://antigravity-jules-orchestration.onrender.com`
+   - Set MCP endpoint: `https://scarmonit.com`
    - Enable autonomous agent mode
    - Configure Jules API key in browser extension settings
 
 3. **Verify Connection**:
    ```bash
-   curl https://antigravity-jules-orchestration.onrender.com/health
+   curl https://scarmonit.com/health
    ```
 
 ---
@@ -266,7 +266,7 @@ The GitHub token should have minimal required scopes:
 
 - **GitHub Repository**: https://github.com/Scarmonit/antigravity-jules-orchestration
 - **Render Dashboard**: https://dashboard.render.com/web/srv-d4mlmna4d50c73ep70sg
-- **Service URL**: https://antigravity-jules-orchestration.onrender.com
+- **Service URL**: https://scarmonit.com
 - **Documentation**: See README.md for architecture details
 
 ---

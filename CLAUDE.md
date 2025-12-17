@@ -69,7 +69,7 @@ cd dashboard && npm run build
 - Platform: Render
 - Branch: `Scarmonit`
 - Health Check: `/health`
-- Live URL: `https://antigravity-jules-orchestration.onrender.com`
+- Live URL: `https://scarmonit.com`
 
 ## Slash Commands (Consolidated)
 
