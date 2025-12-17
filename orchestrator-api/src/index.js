@@ -2,6 +2,7 @@
 import express from 'express';
 import pg from 'pg';
 import axios from 'axios';
+import crypto from 'crypto';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { GoogleAuth } from 'google-auth-library';
@@ -22,8 +23,22 @@ app.use(express.json());
 // Config
 const JULES_API_KEY = process.env.JULES_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 const DATABASE_URL = process.env.DATABASE_URL;
 const PORT = process.env.PORT || 3000;
+
+// GitHub webhook signature verification
+function verifyGitHubWebhook(req) {
+  if (!GITHUB_WEBHOOK_SECRET) {
+    console.warn('[Security] GITHUB_WEBHOOK_SECRET not configured - webhook verification disabled');
+    return true;
+  }
+  const signature = req.headers['x-hub-signature-256'];
+  if (!signature) return false;
+  const hmac = crypto.createHmac('sha256', GITHUB_WEBHOOK_SECRET);
+  const digest = 'sha256=' + hmac.update(JSON.stringify(req.body)).digest('hex');
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+}
 
 // Initialize database (optional - graceful fallback)
 let db = null;
@@ -41,7 +56,8 @@ app.get('/api/v1/metrics', async (req, res) => {
 // Jules API client (Simple Auth for Stability)
 const julesClient = axios.create({
   baseURL: 'https://jules.googleapis.com/v1alpha',
-  headers: { 
+  timeout: 30000, // 30s timeout to prevent hung requests
+  headers: {
     'Content-Type': 'application/json'
   }
 });
@@ -201,37 +217,55 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
 const clients = new Set();
+const HEARTBEAT_INTERVAL = 30000;
 
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
   clients.add(ws);
   console.log('WebSocket client connected');
-  
-  ws.on('close', () => {
-    clients.delete(ws);
-    console.log('WebSocket client disconnected');
-  });
+
+  ws.on('pong', () => { ws.isAlive = true; });
+  ws.on('close', () => { clients.delete(ws); console.log('WebSocket client disconnected'); });
+  ws.on('error', (err) => { console.error('WebSocket error:', err.message); clients.delete(ws); });
 });
 
+// Heartbeat to clean up dead connections
+const heartbeatInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (!ws.isAlive) { clients.delete(ws); return ws.terminate(); }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, HEARTBEAT_INTERVAL);
+
+wss.on('close', () => clearInterval(heartbeatInterval));
+
 function broadcast(data) {
+  const payload = JSON.stringify(data); // Single serialization
   clients.forEach(client => {
-    if (client.readyState === 1) {
-      client.send(JSON.stringify(data));
-    }
+    if (client.readyState === 1) client.send(payload);
   });
 }
 
-// GitHub Webhook Receiver
+// GitHub Webhook Receiver with signature verification
 app.post('/api/v1/webhooks/github', async (req, res) => {
+  if (!verifyGitHubWebhook(req)) {
+    console.error('[Security] Invalid webhook signature - rejecting');
+    return res.status(401).json({ error: 'Invalid webhook signature' });
+  }
+
   const event = req.headers['x-github-event'];
   console.log('Received GitHub webhook: ' + event);
-  
-  broadcast({
-    type: 'github_webhook',
-    event,
-    payload: req.body,
-    timestamp: new Date().toISOString()
+
+  setImmediate(() => {
+    broadcast({
+      type: 'github_webhook',
+      event,
+      payload: req.body,
+      timestamp: new Date().toISOString()
+    });
   });
-  
+
   res.status(200).json({ received: true });
 });
 
