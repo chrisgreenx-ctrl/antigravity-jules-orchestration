@@ -20,7 +20,97 @@ const julesAgent = new https.Agent({
 const PORT = process.env.PORT || 3323;
 const JULES_API_KEY = process.env.JULES_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
-const VERSION = '2.3.0';
+const VERSION = '2.5.0';
+
+// ============ v2.5.0 INFRASTRUCTURE ============
+
+// LRU Cache with TTL for API response caching
+class LRUCache {
+  constructor(maxSize = 100, defaultTTL = 10000) {
+    this.cache = new Map();
+    this.maxSize = maxSize;
+    this.defaultTTL = defaultTTL;
+  }
+  get(key) {
+    const item = this.cache.get(key);
+    if (!item) return null;
+    if (Date.now() > item.expires) { this.cache.delete(key); return null; }
+    this.cache.delete(key);
+    this.cache.set(key, item);
+    return item.value;
+  }
+  set(key, value, ttl = this.defaultTTL) {
+    // Fix: only evict if key doesn't already exist
+    if (this.cache.size >= this.maxSize && !this.cache.has(key)) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+    this.cache.set(key, { value, expires: Date.now() + ttl });
+  }
+  invalidate(pattern) { for (const key of this.cache.keys()) { if (key.includes(pattern)) this.cache.delete(key); } }
+  clear() { this.cache.clear(); }
+  stats() { return { size: this.cache.size, maxSize: this.maxSize }; }
+}
+
+// Session Queue with Priority
+class SessionQueue {
+  constructor(maxRetained = 100) { this.queue = []; this.processing = false; this.maxRetained = maxRetained; }
+  add(config, priority = 5) {
+    const id = `queue_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const item = { id, config, priority, addedAt: new Date().toISOString(), status: 'pending' };
+    this.queue.push(item);
+    this.queue.sort((a, b) => a.priority - b.priority);
+    this._cleanup(); // Clean old completed/failed items
+    return item;
+  }
+  remove(id) { const idx = this.queue.findIndex(i => i.id === id); return idx >= 0 ? this.queue.splice(idx, 1)[0] : null; }
+  getNext() { return this.queue.find(i => i.status === 'pending'); }
+  markProcessing(id) { const item = this.queue.find(i => i.id === id); if (item) item.status = 'processing'; }
+  markComplete(id, sessionId) { const item = this.queue.find(i => i.id === id); if (item) { item.status = 'completed'; item.sessionId = sessionId; item.completedAt = new Date().toISOString(); } this._cleanup(); }
+  markFailed(id, error) { const item = this.queue.find(i => i.id === id); if (item) { item.status = 'failed'; item.error = error; item.failedAt = new Date().toISOString(); } this._cleanup(); }
+  list() { return this.queue.map(i => ({ id: i.id, title: i.config.title || 'Untitled', priority: i.priority, status: i.status, addedAt: i.addedAt, sessionId: i.sessionId })); }
+  stats() { return { total: this.queue.length, pending: this.queue.filter(i => i.status === 'pending').length, processing: this.queue.filter(i => i.status === 'processing').length, completed: this.queue.filter(i => i.status === 'completed').length, failed: this.queue.filter(i => i.status === 'failed').length }; }
+  clear() { const cleared = this.queue.filter(i => i.status === 'pending').length; this.queue = this.queue.filter(i => i.status !== 'pending'); return cleared; }
+  // Fix memory leak: remove old completed/failed items, keep only maxRetained
+  _cleanup() {
+    const terminal = this.queue.filter(i => i.status === 'completed' || i.status === 'failed');
+    if (terminal.length > this.maxRetained) {
+      const toRemove = terminal.slice(0, terminal.length - this.maxRetained);
+      toRemove.forEach(item => { const idx = this.queue.indexOf(item); if (idx >= 0) this.queue.splice(idx, 1); });
+    }
+  }
+}
+
+const apiCache = new LRUCache(100, 10000);
+const sessionQueue = new SessionQueue();
+const sessionTemplates = new Map();
+
+// Structured Logging
+const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+const currentLogLevel = LOG_LEVELS[process.env.LOG_LEVEL || 'info'];
+function structuredLog(level, message, context = {}) {
+  if (LOG_LEVELS[level] > currentLogLevel) return;
+  console.log(JSON.stringify({ timestamp: new Date().toISOString(), level, message, ...context, correlationId: context.correlationId || 'system' }));
+}
+
+// Retry with Exponential Backoff
+async function retryWithBackoff(fn, options = {}) {
+  const { maxRetries = 3, baseDelay = 1000, maxDelay = 10000, correlationId } = options;
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try { return await fn(); }
+    catch (error) {
+      lastError = error;
+      if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500 && error.statusCode !== 429) throw error;
+      if (attempt < maxRetries) {
+        const delay = Math.min(baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000, maxDelay);
+        structuredLog('warn', `Retry attempt ${attempt}/${maxRetries}`, { correlationId, delay: Math.round(delay), error: error.message });
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  throw lastError;
+}
 
 const app = express();
 app.use(express.json({ limit: '1mb', strict: true }));
@@ -375,7 +465,36 @@ app.get('/mcp/tools', (req, res) => {
         name: 'ollama_rag_clear',
         description: 'Clear the RAG index',
         parameters: {}
-      }
+      },
+      // v2.5.0: Session Management
+      { name: 'jules_cancel_session', description: 'Cancel/abort an active session', parameters: { sessionId: { type: 'string', required: true } } },
+      { name: 'jules_retry_session', description: 'Retry a failed session', parameters: { sessionId: { type: 'string', required: true }, modifiedPrompt: { type: 'string', required: false } } },
+      { name: 'jules_get_diff', description: 'Get code changes from session', parameters: { sessionId: { type: 'string', required: true } } },
+      { name: 'jules_list_batches', description: 'List all batch operations', parameters: {} },
+      { name: 'jules_delete_session', description: 'Delete a session', parameters: { sessionId: { type: 'string', required: true } } },
+      { name: 'jules_cache_stats', description: 'Get cache statistics', parameters: {} },
+      { name: 'jules_clear_cache', description: 'Clear API cache', parameters: {} },
+      { name: 'jules_cancel_all_active', description: 'Cancel all active sessions', parameters: { confirm: { type: 'boolean', required: true } } },
+      // v2.5.0: Session Templates
+      { name: 'jules_create_template', description: 'Save session config as template', parameters: { name: { type: 'string', required: true }, description: { type: 'string' }, config: { type: 'object', required: true } } },
+      { name: 'jules_list_templates', description: 'List saved templates', parameters: {} },
+      { name: 'jules_create_from_template', description: 'Create session from template', parameters: { templateName: { type: 'string', required: true }, overrides: { type: 'object' } } },
+      { name: 'jules_delete_template', description: 'Delete a template', parameters: { name: { type: 'string', required: true } } },
+      // v2.5.0: Session Cloning & Search
+      { name: 'jules_clone_session', description: 'Clone a session config', parameters: { sessionId: { type: 'string', required: true }, modifiedPrompt: { type: 'string' }, newTitle: { type: 'string' } } },
+      { name: 'jules_search_sessions', description: 'Search sessions with filters', parameters: { query: { type: 'string' }, state: { type: 'string' }, limit: { type: 'number' } } },
+      // v2.5.0: PR Integration
+      { name: 'jules_get_pr_status', description: 'Get PR status from session', parameters: { sessionId: { type: 'string', required: true } } },
+      { name: 'jules_merge_pr', description: 'Merge a PR', parameters: { owner: { type: 'string', required: true }, repo: { type: 'string', required: true }, prNumber: { type: 'number', required: true }, mergeMethod: { type: 'string' } } },
+      { name: 'jules_add_pr_comment', description: 'Add comment to PR', parameters: { owner: { type: 'string', required: true }, repo: { type: 'string', required: true }, prNumber: { type: 'number', required: true }, comment: { type: 'string', required: true } } },
+      // v2.5.0: Session Queue
+      { name: 'jules_queue_session', description: 'Queue session with priority', parameters: { config: { type: 'object', required: true }, priority: { type: 'number' } } },
+      { name: 'jules_get_queue', description: 'Get queue status', parameters: {} },
+      { name: 'jules_process_queue', description: 'Process next queued item', parameters: {} },
+      { name: 'jules_clear_queue', description: 'Clear queue', parameters: {} },
+      // v2.5.0: Analytics
+      { name: 'jules_batch_retry_failed', description: 'Retry failed sessions in batch', parameters: { batchId: { type: 'string', required: true } } },
+      { name: 'jules_get_analytics', description: 'Get session analytics', parameters: { days: { type: 'number' } } }
     ]
   });
 });
@@ -419,6 +538,41 @@ function initializeToolRegistry() {
   toolRegistry.set('ollama_rag_query', (p) => ragQuery(p));
   toolRegistry.set('ollama_rag_status', (p) => ragStatus());
   toolRegistry.set('ollama_rag_clear', (p) => ragClear());
+
+  // v2.5.0: Session Management
+  toolRegistry.set('jules_cancel_session', (p) => cancelSession(p.sessionId));
+  toolRegistry.set('jules_retry_session', (p) => retrySession(p.sessionId, p.modifiedPrompt));
+  toolRegistry.set('jules_get_diff', (p) => getSessionDiff(p.sessionId));
+  toolRegistry.set('jules_list_batches', () => batchProcessor.listBatches());
+  toolRegistry.set('jules_delete_session', (p) => deleteSession(p.sessionId));
+  toolRegistry.set('jules_clear_cache', () => { apiCache.clear(); return { success: true, message: 'Cache cleared' }; });
+  toolRegistry.set('jules_cache_stats', () => ({ ...apiCache.stats(), circuitBreaker: { failures: circuitBreaker.failures, isOpen: circuitBreaker.isOpen() } }));
+  toolRegistry.set('jules_cancel_all_active', (p) => cancelAllActiveSessions(p.confirm));
+
+  // v2.5.0: Session Templates
+  toolRegistry.set('jules_create_template', (p) => createTemplate(p.name, p.description, p.config));
+  toolRegistry.set('jules_list_templates', () => listTemplates());
+  toolRegistry.set('jules_create_from_template', (p) => createFromTemplate(p.templateName, p.overrides));
+  toolRegistry.set('jules_delete_template', (p) => deleteTemplate(p.name));
+
+  // v2.5.0: Session Cloning & Search
+  toolRegistry.set('jules_clone_session', (p) => cloneSession(p.sessionId, p.modifiedPrompt, p.newTitle));
+  toolRegistry.set('jules_search_sessions', (p) => searchSessions(p.query, p.state, p.limit));
+
+  // v2.5.0: PR Integration
+  toolRegistry.set('jules_get_pr_status', (p) => getPrStatus(p.sessionId));
+  toolRegistry.set('jules_merge_pr', (p) => mergePr(p.owner, p.repo, p.prNumber, p.mergeMethod));
+  toolRegistry.set('jules_add_pr_comment', (p) => addPrComment(p.owner, p.repo, p.prNumber, p.comment));
+
+  // v2.5.0: Session Queue
+  toolRegistry.set('jules_queue_session', (p) => ({ success: true, item: sessionQueue.add(p.config, p.priority) }));
+  toolRegistry.set('jules_get_queue', () => ({ queue: sessionQueue.list(), stats: sessionQueue.stats() }));
+  toolRegistry.set('jules_process_queue', () => processQueue());
+  toolRegistry.set('jules_clear_queue', () => ({ success: true, cleared: sessionQueue.clear() }));
+
+  // v2.5.0: Batch Retry & Analytics
+  toolRegistry.set('jules_batch_retry_failed', (p) => batchRetryFailed(p.batchId));
+  toolRegistry.set('jules_get_analytics', (p) => getAnalytics(p.days));
 }
 
 // MCP Protocol - Execute tool with O(1) registry lookup
@@ -646,6 +800,244 @@ async function createSessionsFromLabel(params) {
     label,
     issuesProcessed: issues.length,
     ...batchResult
+  };
+}
+
+// ============ v2.5.0 HELPER FUNCTIONS ============
+
+// Session Management
+async function cancelSession(sessionId) {
+  structuredLog('info', 'Cancelling session', { sessionId });
+  apiCache.invalidate(sessionId);
+  return await retryWithBackoff(() => julesRequest('POST', `/sessions/${sessionId}:cancel`, {}), { maxRetries: 2 });
+}
+
+async function retrySession(sessionId, modifiedPrompt = null) {
+  structuredLog('info', 'Retrying session', { sessionId });
+  const original = await julesRequest('GET', `/sessions/${sessionId}`);
+  if (!original) throw new Error(`Session ${sessionId} not found`);
+  return await createJulesSession({
+    prompt: modifiedPrompt || original.prompt || 'Retry previous task',
+    source: original.sourceContext?.source || original.source,
+    title: `Retry: ${original.title || sessionId}`,
+    requirePlanApproval: original.requirePlanApproval ?? true,
+    automationMode: original.automationMode || 'AUTO_CREATE_PR'
+  });
+}
+
+async function getSessionDiff(sessionId) {
+  const session = await julesRequest('GET', `/sessions/${sessionId}`);
+  const activities = await julesRequest('GET', `/sessions/${sessionId}/activities`);
+  const prActivity = activities.activities?.find(a => a.prCreated);
+  return { sessionId, state: session.state, title: session.title, prUrl: prActivity?.prCreated?.url, prCreated: !!prActivity };
+}
+
+async function deleteSession(sessionId) {
+  apiCache.invalidate(sessionId);
+  return await retryWithBackoff(() => julesRequest('DELETE', `/sessions/${sessionId}`), { maxRetries: 2 });
+}
+
+async function cancelAllActiveSessions(confirm) {
+  if (!confirm) throw new Error('Must pass confirm: true to cancel all sessions');
+  const sessions = await sessionMonitor.getActiveSessions();
+  const results = await Promise.all(sessions.map(async (s) => {
+    const id = s.name?.split('/').pop() || s.id;
+    try { await julesRequest('POST', `/sessions/${id}:cancel`, {}); return { id, cancelled: true }; }
+    catch (error) { return { id, cancelled: false, error: error.message }; }
+  }));
+  apiCache.clear();
+  return { totalAttempted: sessions.length, cancelled: results.filter(r => r.cancelled).length, failed: results.filter(r => !r.cancelled).length, results };
+}
+
+// Session Templates
+const MAX_TEMPLATES = 100;
+function createTemplate(name, description, config) {
+  if (!name || !config) throw new Error('Template name and config required');
+  if (sessionTemplates.has(name)) throw new Error(`Template "${name}" already exists`);
+  if (sessionTemplates.size >= MAX_TEMPLATES) throw new Error(`Template limit reached (max ${MAX_TEMPLATES}). Delete unused templates first.`);
+  if (typeof name !== 'string' || name.length > 100) throw new Error('Template name must be a string under 100 characters');
+  const template = { name, description: description || '', config, createdAt: new Date().toISOString(), usageCount: 0 };
+  sessionTemplates.set(name, template);
+  return { success: true, template };
+}
+
+function listTemplates() {
+  return { templates: Array.from(sessionTemplates.values()), count: sessionTemplates.size };
+}
+
+async function createFromTemplate(templateName, overrides = {}) {
+  const template = sessionTemplates.get(templateName);
+  if (!template) throw new Error(`Template "${templateName}" not found`);
+  template.usageCount++;
+  return await createJulesSession({ ...template.config, ...overrides });
+}
+
+function deleteTemplate(name) {
+  if (!sessionTemplates.has(name)) throw new Error(`Template "${name}" not found`);
+  sessionTemplates.delete(name);
+  return { success: true, message: `Template "${name}" deleted` };
+}
+
+// Session Cloning & Search
+async function cloneSession(sessionId, modifiedPrompt = null, newTitle = null) {
+  const original = await julesRequest('GET', `/sessions/${sessionId}`);
+  if (!original) throw new Error(`Session ${sessionId} not found`);
+  return await createJulesSession({
+    prompt: modifiedPrompt || original.prompt || 'Clone of previous session',
+    source: original.sourceContext?.source || original.source,
+    title: newTitle || `Clone: ${original.title || sessionId}`,
+    requirePlanApproval: original.requirePlanApproval ?? true,
+    automationMode: original.automationMode || 'AUTO_CREATE_PR'
+  });
+}
+
+async function searchSessions(query = null, state = null, limit = 20) {
+  const allSessions = await julesRequest('GET', '/sessions');
+  let sessions = allSessions.sessions || [];
+  if (state) sessions = sessions.filter(s => s.state === state.toUpperCase());
+  if (query) { const q = query.toLowerCase(); sessions = sessions.filter(s => (s.title && s.title.toLowerCase().includes(q)) || (s.prompt && s.prompt.toLowerCase().includes(q))); }
+  return { sessions: sessions.slice(0, limit), total: sessions.length, filters: { query, state, limit } };
+}
+
+// PR Integration - Input Validation
+const VALID_MERGE_METHODS = ['merge', 'squash', 'rebase'];
+const GITHUB_OWNER_PATTERN = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
+const GITHUB_REPO_PATTERN = /^[a-zA-Z0-9._-]{1,100}$/;
+const MAX_COMMENT_LENGTH = 10000;
+
+function validateGitHubParams(owner, repo, prNumber) {
+  if (!owner || typeof owner !== 'string' || !GITHUB_OWNER_PATTERN.test(owner)) {
+    throw new Error('Invalid GitHub owner: must be alphanumeric with hyphens, 1-39 chars');
+  }
+  if (!repo || typeof repo !== 'string' || !GITHUB_REPO_PATTERN.test(repo)) {
+    throw new Error('Invalid GitHub repository: must be alphanumeric with dots/hyphens/underscores, 1-100 chars');
+  }
+  if (owner.includes('..') || repo.includes('..') || owner.includes('/') || repo.includes('/')) {
+    throw new Error('Invalid parameters: path traversal not allowed');
+  }
+  if (!Number.isInteger(prNumber) || prNumber < 1 || prNumber > 999999) {
+    throw new Error('Invalid PR number: must be integer between 1-999999');
+  }
+}
+
+async function getPrStatus(sessionId) {
+  const session = await julesRequest('GET', `/sessions/${sessionId}`);
+  const activities = await julesRequest('GET', `/sessions/${sessionId}/activities`);
+  const prActivity = activities.activities?.find(a => a.prCreated);
+  if (!prActivity) return { sessionId, prCreated: false, message: 'No PR created' };
+  const prUrl = prActivity.prCreated.url;
+  // Validate URL format before parsing
+  if (!prUrl || typeof prUrl !== 'string' || prUrl.length > 500) {
+    return { sessionId, prCreated: true, prUrl, error: 'Invalid PR URL format' };
+  }
+  try {
+    const url = new URL(prUrl);
+    if (url.hostname !== 'github.com') return { sessionId, prCreated: true, prUrl, error: 'Not a GitHub URL' };
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts.length !== 4 || parts[2] !== 'pull') return { sessionId, prCreated: true, prUrl, error: 'Invalid PR URL structure' };
+    const [owner, repo, , prNum] = parts;
+    const prNumber = parseInt(prNum, 10);
+    return { sessionId, prCreated: true, prUrl, owner, repo, prNumber: Number.isNaN(prNumber) ? null : prNumber, sessionState: session.state };
+  } catch { return { sessionId, prCreated: true, prUrl, error: 'Failed to parse PR URL' }; }
+}
+
+async function mergePr(owner, repo, prNumber, mergeMethod = 'squash') {
+  if (!GITHUB_TOKEN) throw new Error('GITHUB_TOKEN not configured');
+  validateGitHubParams(owner, repo, prNumber);
+  if (!VALID_MERGE_METHODS.includes(mergeMethod)) {
+    throw new Error(`Invalid merge method: must be one of ${VALID_MERGE_METHODS.join(', ')}`);
+  }
+  return new Promise((resolve, reject) => {
+    const req = https.request({ hostname: 'api.github.com', path: `/repos/${owner}/${repo}/pulls/${prNumber}/merge`, method: 'PUT',
+      headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Jules-MCP-Server', 'Content-Type': 'application/json' }
+    }, (res) => {
+      let data = ''; res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve({ success: true, merged: true, prNumber });
+        else {
+          const errMsg = res.statusCode === 403 ? 'Permission denied' : res.statusCode === 404 ? 'PR not found' : res.statusCode === 422 ? 'PR cannot be merged' : 'Merge failed';
+          reject(new Error(errMsg));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(JSON.stringify({ merge_method: mergeMethod }));
+    req.end();
+  });
+}
+
+async function addPrComment(owner, repo, prNumber, comment) {
+  if (!GITHUB_TOKEN) throw new Error('GITHUB_TOKEN not configured');
+  validateGitHubParams(owner, repo, prNumber);
+  if (typeof comment !== 'string' || comment.trim().length === 0) {
+    throw new Error('Comment cannot be empty');
+  }
+  if (comment.length > MAX_COMMENT_LENGTH) {
+    throw new Error(`Comment exceeds maximum length of ${MAX_COMMENT_LENGTH} characters`);
+  }
+  return new Promise((resolve, reject) => {
+    const req = https.request({ hostname: 'api.github.com', path: `/repos/${owner}/${repo}/issues/${prNumber}/comments`, method: 'POST',
+      headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Jules-MCP-Server', 'Content-Type': 'application/json' }
+    }, (res) => {
+      let data = ''; res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve({ success: true, commentId: JSON.parse(data).id, prNumber });
+        else {
+          const errMsg = res.statusCode === 403 ? 'Permission denied' : res.statusCode === 404 ? 'PR not found' : 'Failed to add comment';
+          reject(new Error(errMsg));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(JSON.stringify({ body: comment }));
+    req.end();
+  });
+}
+
+// Session Queue
+async function processQueue() {
+  const next = sessionQueue.getNext();
+  if (!next) return { processed: false, message: 'Queue is empty' };
+  sessionQueue.markProcessing(next.id);
+  try {
+    const session = await createJulesSession(next.config);
+    const sessionId = session.name?.split('/').pop() || session.id;
+    sessionQueue.markComplete(next.id, sessionId);
+    return { processed: true, queueId: next.id, sessionId, session };
+  } catch (error) {
+    sessionQueue.markFailed(next.id, error.message);
+    return { processed: false, queueId: next.id, error: error.message };
+  }
+}
+
+// Batch Retry
+async function batchRetryFailed(batchId) {
+  const batch = batchProcessor.getBatchStatus(batchId);
+  if (!batch) throw new Error(`Batch ${batchId} not found`);
+  const failedTasks = batch.sessions?.filter(s => s.status === 'failed' || s.state === 'FAILED') || [];
+  if (failedTasks.length === 0) return { message: 'No failed sessions to retry', batchId };
+  const results = await Promise.all(failedTasks.map(async (t) => {
+    try { const newSession = await retrySession(t.sessionId || t.id); return { originalId: t.sessionId || t.id, newSessionId: newSession.name || newSession.id, success: true }; }
+    catch (error) { return { originalId: t.sessionId || t.id, success: false, error: error.message }; }
+  }));
+  return { batchId, totalRetried: failedTasks.length, successful: results.filter(r => r.success).length, failed: results.filter(r => !r.success).length, results };
+}
+
+// Analytics
+async function getAnalytics(days = 7) {
+  const allSessions = await julesRequest('GET', '/sessions');
+  const sessions = allSessions.sessions || [];
+  const cutoffDate = new Date(); cutoffDate.setDate(cutoffDate.getDate() - days);
+  const recentSessions = sessions.filter(s => new Date(s.createTime || s.createdAt) >= cutoffDate);
+  const byState = {}; for (const s of recentSessions) { const state = s.state || 'UNKNOWN'; byState[state] = (byState[state] || 0) + 1; }
+  const completed = byState['COMPLETED'] || 0, failed = byState['FAILED'] || 0, total = recentSessions.length;
+  return {
+    period: `Last ${days} days`, totalSessions: total, byState,
+    successRate: total > 0 ? Math.round((completed / total) * 100) + '%' : 'N/A',
+    failureRate: total > 0 ? Math.round((failed / total) * 100) + '%' : 'N/A',
+    averagePerDay: Math.round((total / days) * 10) / 10,
+    templates: { count: sessionTemplates.size, totalUsage: Array.from(sessionTemplates.values()).reduce((sum, t) => sum + t.usageCount, 0) },
+    queue: sessionQueue.stats(), cache: apiCache.stats()
   };
 }
 
