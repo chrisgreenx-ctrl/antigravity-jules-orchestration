@@ -1,10 +1,26 @@
 # Claude Code Project Context
 
-**Version: 2.5.1** | [CHANGELOG](./CHANGELOG.md)
+**Version: 2.6.0** | [CHANGELOG](./CHANGELOG.md)
 
 ## Project Overview
 
-**antigravity-jules-orchestration** is an MCP (Model Context Protocol) server that integrates Google's Jules API with Antigravity for autonomous AI development workflows. It provides **45 MCP tools** including session templates, priority queues, PR integration, Ollama/RAG, hands-free coding sessions, and orchestrated development tasks.
+**antigravity-jules-orchestration** is an MCP (Model Context Protocol) server that integrates Google's Jules API with Antigravity for autonomous AI development workflows. It provides **65 MCP tools** including session templates, priority queues, PR integration, Ollama/RAG, Render auto-fix, suggested tasks scanning, hands-free coding sessions, and orchestrated development tasks.
+
+## What's New in v2.6.0
+
+- **Render Auto-Fix Integration**: Automatically detect and fix build failures on Jules PRs
+- **Suggested Tasks Scanner**: Proactively scan codebases for TODO/FIXME/HACK comments
+- **15 New MCP Tools**: Render integration (12) + Suggested Tasks (3)
+- **Secure Credential Storage**: AES-256-GCM encrypted API key storage
+- **Build Log Analysis**: Intelligent error pattern recognition and fix suggestions
+- **Webhook Receiver**: `/webhooks/render` endpoint for deployment events
+- **Webhook Security**: Replay attack prevention, timestamp validation, signature verification
+- **Service Monitoring**: Configurable allow-list for monitored services
+- **New lib/encryption.js**: Secure credential storage with machine-bound keys
+- **New lib/render-client.js**: Render API client with connection pooling
+- **New lib/render-autofix.js**: Auto-fix orchestration pipeline
+- **New lib/suggested-tasks.js**: Codebase scanning for actionable comments
+- **SECURITY.md**: Comprehensive security documentation
 
 ## What's New in v2.5.1
 
@@ -40,15 +56,20 @@ antigravity-jules-orchestration/
 │   ├── github.js              # GitHub API integration
 │   ├── ollama.js              # Local Ollama LLM integration
 │   ├── rag.js                 # RAG codebase indexing
-│   └── temporal-integration.js # Scheduled Jules sessions (NEW)
+│   ├── temporal-integration.js # Scheduled Jules sessions
+│   ├── encryption.js          # AES-256-GCM credential storage (NEW v2.6.0)
+│   ├── render-client.js       # Render API client (NEW v2.6.0)
+│   ├── render-autofix.js      # Auto-fix pipeline (NEW v2.6.0)
+│   └── suggested-tasks.js     # TODO/FIXME scanner (NEW v2.6.0)
 ├── middleware/
 │   └── errorHandler.js        # Comprehensive error handling
 ├── scripts/                    # Deployment & automation scripts
 ├── templates/                  # Workflow templates (JSON)
+├── SECURITY.md                # Security documentation (NEW v2.6.0)
 └── .github/workflows/         # CI/CD pipelines
 ```
 
-## MCP Tools Reference (45 tools)
+## MCP Tools Reference (57 tools)
 
 ### Jules Core API
 | Tool | Description |
@@ -139,6 +160,41 @@ antigravity-jules-orchestration/
 | `ollama_rag_status` | Get index status |
 | `ollama_rag_clear` | Clear RAG index |
 
+### Semantic Memory Integration (v2.5.2+)
+| Tool | Description |
+|------|-------------|
+| `memory_recall_context` | Recall relevant memories for a task |
+| `memory_store` | Store a memory manually |
+| `memory_search` | Search memories by query |
+| `memory_related` | Get memories related to a specific memory |
+| `memory_reinforce` | Reinforce a memory when a pattern proves successful |
+| `memory_forget` | Apply decay to old memories or remove them |
+| `memory_health` | Check semantic memory service health |
+| `memory_maintenance_schedule` | Get memory maintenance schedule |
+
+### Render Integration (NEW v2.6.0)
+| Tool | Description |
+|------|-------------|
+| `render_connect` | Connect Render with API key (encrypted storage) |
+| `render_disconnect` | Disconnect Render integration |
+| `render_status` | Get connection and auto-fix status |
+| `render_list_services` | List all Render services |
+| `render_list_deploys` | List deploys for a service |
+| `render_get_build_logs` | Get build logs for a deploy |
+| `render_analyze_failure` | Analyze latest failed deploy |
+| `render_autofix_status` | Get auto-fix pipeline status |
+| `render_set_autofix` | Enable/disable auto-fix |
+| `render_add_monitored_service` | Add service to monitor list |
+| `render_remove_monitored_service` | Remove service from monitor list |
+| `render_trigger_autofix` | Manually trigger auto-fix |
+
+### Suggested Tasks (NEW v2.6.0)
+| Tool | Description |
+|------|-------------|
+| `jules_suggested_tasks` | Scan codebase for TODO/FIXME/HACK comments |
+| `jules_fix_suggested_task` | Create Jules session to fix a suggested task |
+| `jules_clear_suggested_cache` | Clear suggested tasks cache |
+
 ## Slash Commands
 
 | Command | Purpose |
@@ -182,6 +238,7 @@ cd dashboard && npm test          # Dashboard tests
 | `SLACK_WEBHOOK_URL` | Slack notifications | No |
 | `LOG_LEVEL` | Logging level: error/warn/info/debug | No |
 | `ALLOWED_ORIGINS` | CORS whitelist (comma-separated) | No |
+| `SEMANTIC_MEMORY_URL` | Semantic memory MCP server URL | No |
 
 ## Performance Features
 
@@ -260,6 +317,63 @@ await cancelScheduledJulesTask(taskId);
 1. jules_search_sessions         - Find completed sessions
 2. jules_clone_session          - Clone successful config
 3. Modify prompt and run
+```
+
+### Semantic Memory Integration
+```
+# Check memory service health
+memory_health
+
+# Automatic integration (when SEMANTIC_MEMORY_URL is set):
+# - Before session: Relevant memories automatically recalled
+# - On PR merge: Session outcome stored for future reference
+
+# Manual memory operations
+memory_store content="Fixed auth bug by..." tags=["bugfix","auth"]
+memory_search query="authentication patterns" limit=5
+memory_related memoryId="uuid-here" limit=3
+memory_reinforce memoryId="uuid-here" boost=0.2
+memory_forget olderThanDays=60 belowImportance=0.2
+```
+
+### Render Auto-Fix (NEW v2.6.0)
+```
+# Initial Setup
+render_connect apiKey="rnd_xxx" webhookSecret="secret"  # Connect Render
+render_add_monitored_service serviceId="srv-xxx"        # Monitor specific service
+render_set_autofix enabled=true                         # Enable auto-fix
+
+# Manual Trigger
+render_trigger_autofix serviceId="srv-xxx"  # Manually fix latest failure
+
+# Automatic Flow (Webhook)
+1. Render webhook → /webhooks/render
+2. Build failure detected on jules/* branch
+3. Logs fetched and analyzed
+4. Jules session created with fix prompt
+5. Fix pushed to same branch
+6. Render auto-rebuilds
+```
+
+### Suggested Tasks (NEW v2.6.0)
+```
+# Scan codebase for actionable comments
+jules_suggested_tasks directory="/path/to/repo" limit=10 minPriority=4
+
+# Response includes:
+{
+  "tasks": [
+    { "type": "FIXME", "text": "Handle edge case", "location": "src/api.js:42", "priority": 5 },
+    { "type": "TODO", "text": "Add validation", "location": "src/utils.js:15", "priority": 4 }
+  ],
+  "summary": { "total": 21, "byType": { "todo": 10, "fixme": 5, "hack": 6 } }
+}
+
+# Create Jules session to fix a task
+jules_fix_suggested_task directory="/path/to/repo" taskIndex=0 source="sources/github/owner/repo"
+
+# Clear cache for fresh scan
+jules_clear_suggested_cache
 ```
 
 ## Deployment

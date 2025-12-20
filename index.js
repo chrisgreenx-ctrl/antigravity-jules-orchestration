@@ -13,7 +13,33 @@ import {
   checkMemoryHealth,
   getMemoryMaintenanceSchedule,
   searchSessionMemories,
+  getRelatedMemories,
+  decayOldMemories,
 } from './lib/memory-client.js';
+import {
+  isConfigured as isRenderConfigured,
+  connect as renderConnect,
+  disconnect as renderDisconnect,
+  listServices as renderListServices,
+  listDeploys as renderListDeploys,
+  getBuildLogs as renderGetBuildLogs,
+  getLatestFailedDeploy as renderGetLatestFailedDeploy,
+  analyzeErrors as renderAnalyzeErrors,
+} from './lib/render-client.js';
+import {
+  handleWebhook as handleRenderWebhook,
+  getAutoFixStatus as getRenderAutoFixStatus,
+  setAutoFixEnabled as setRenderAutoFixEnabled,
+  addMonitoredService as addRenderMonitoredService,
+  removeMonitoredService as removeRenderMonitoredService,
+  startAutoFix as startRenderAutoFix,
+  startCleanupInterval as startRenderCleanupInterval,
+} from './lib/render-autofix.js';
+import {
+  getSuggestedTasks,
+  clearCache as clearSuggestedTasksCache,
+  generateFixPrompt as generateSuggestedTaskFixPrompt,
+} from './lib/suggested-tasks.js';
 
 dotenv.config();
 
@@ -28,7 +54,7 @@ const julesAgent = new https.Agent({
 const PORT = process.env.PORT || 3323;
 const JULES_API_KEY = process.env.JULES_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
-const VERSION = '2.5.2';
+const VERSION = '2.6.0';
 
 // ============ v2.5.0 INFRASTRUCTURE ============
 
@@ -121,7 +147,17 @@ async function retryWithBackoff(fn, options = {}) {
 }
 
 const app = express();
-app.use(express.json({ limit: '1mb', strict: true }));
+// Preserve raw body for webhook signature verification
+app.use(express.json({
+  limit: '1mb',
+  strict: true,
+  verify: (req, res, buf) => {
+    // Store raw body for webhook signature verification
+    if (req.url.startsWith('/webhooks/')) {
+      req.rawBody = buf.toString('utf8');
+    }
+  }
+}));
 
 // Circuit Breaker for Jules API
 const circuitBreaker = {
@@ -294,6 +330,26 @@ app.get('/api/sessions/:id/timeline', async (req, res) => {
     const timeline = await sessionMonitor.getSessionTimeline(req.params.id);
     res.json(timeline);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ WEBHOOKS ============
+
+// Render webhook for build failure auto-fix
+app.post('/webhooks/render', async (req, res) => {
+  console.log('[Webhook] Received Render webhook');
+
+  try {
+    const result = await handleRenderWebhook(
+      req,
+      createJulesSession,
+      (sessionId, msg) => julesRequest('POST', `/sessions/${sessionId}:sendMessage`, msg)
+    );
+
+    res.status(result.status || 200).json(result);
+  } catch (error) {
+    console.error('[Webhook] Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -508,8 +564,28 @@ app.get('/mcp/tools', (req, res) => {
       { name: 'memory_recall_context', description: 'Recall relevant memories for a task', parameters: { task: { type: 'string', required: true }, repository: { type: 'string' }, limit: { type: 'number' } } },
       { name: 'memory_store', description: 'Store a memory manually', parameters: { content: { type: 'string', required: true }, summary: { type: 'string' }, tags: { type: 'array' }, importance: { type: 'number' } } },
       { name: 'memory_search', description: 'Search memories by query', parameters: { query: { type: 'string', required: true }, tags: { type: 'array' }, limit: { type: 'number' } } },
+      { name: 'memory_related', description: 'Get memories related to a specific memory', parameters: { memoryId: { type: 'string', required: true }, limit: { type: 'number' } } },
+      { name: 'memory_reinforce', description: 'Reinforce a memory when a pattern proves successful', parameters: { memoryId: { type: 'string', required: true }, boost: { type: 'number' } } },
+      { name: 'memory_forget', description: 'Apply decay to old memories or remove them', parameters: { olderThanDays: { type: 'number' }, belowImportance: { type: 'number' }, soft: { type: 'boolean' }, decayFactor: { type: 'number' } } },
       { name: 'memory_health', description: 'Check semantic memory service health', parameters: {} },
-      { name: 'memory_maintenance_schedule', description: 'Get memory maintenance schedule for temporal-agent-mcp', parameters: {} }
+      { name: 'memory_maintenance_schedule', description: 'Get memory maintenance schedule for temporal-agent-mcp', parameters: {} },
+      // v2.6.0: Render Integration (Auto-Fix)
+      { name: 'render_connect', description: 'Connect Render integration by storing API key', parameters: { apiKey: { type: 'string', required: true, description: 'Render API key (starts with rnd_)' }, webhookSecret: { type: 'string', required: false, description: 'Webhook secret for signature verification' } } },
+      { name: 'render_disconnect', description: 'Disconnect Render integration', parameters: {} },
+      { name: 'render_status', description: 'Check Render integration status', parameters: {} },
+      { name: 'render_list_services', description: 'List all Render services', parameters: {} },
+      { name: 'render_list_deploys', description: 'List deploys for a service', parameters: { serviceId: { type: 'string', required: true, description: 'Service ID (srv-xxx)' }, limit: { type: 'number', required: false } } },
+      { name: 'render_get_build_logs', description: 'Get build logs for a deploy', parameters: { serviceId: { type: 'string', required: true }, deployId: { type: 'string', required: true } } },
+      { name: 'render_analyze_failure', description: 'Analyze a build failure and get fix suggestions', parameters: { serviceId: { type: 'string', required: true } } },
+      { name: 'render_autofix_status', description: 'Get auto-fix status and active operations', parameters: {} },
+      { name: 'render_set_autofix', description: 'Enable or disable auto-fix for Jules PRs', parameters: { enabled: { type: 'boolean', required: true } } },
+      { name: 'render_add_monitored_service', description: 'Add a service to auto-fix monitoring', parameters: { serviceId: { type: 'string', required: true } } },
+      { name: 'render_remove_monitored_service', description: 'Remove a service from auto-fix monitoring', parameters: { serviceId: { type: 'string', required: true } } },
+      { name: 'render_trigger_autofix', description: 'Manually trigger auto-fix for a failed deploy', parameters: { serviceId: { type: 'string', required: true }, deployId: { type: 'string', required: true } } },
+      // v2.6.0: Suggested Tasks
+      { name: 'jules_suggested_tasks', description: 'Scan codebase for TODO/FIXME/HACK comments and suggest tasks for Jules', parameters: { directory: { type: 'string', required: true, description: 'Directory to scan' }, types: { type: 'array', required: false, description: 'Filter by comment types (todo, fixme, hack, bug, etc.)' }, minPriority: { type: 'number', required: false, description: 'Minimum priority threshold (1-10)' }, limit: { type: 'number', required: false, description: 'Max tasks to return (default: 20)' }, includeGitInfo: { type: 'boolean', required: false, description: 'Include git blame info for each task' } } },
+      { name: 'jules_fix_suggested_task', description: 'Create a Jules session to fix a suggested task', parameters: { directory: { type: 'string', required: true }, taskIndex: { type: 'number', required: true, description: 'Index of task from jules_suggested_tasks result' }, source: { type: 'string', required: true, description: 'GitHub source (sources/github/owner/repo)' } } },
+      { name: 'jules_clear_suggested_cache', description: 'Clear suggested tasks cache', parameters: {} }
     ]
   });
 });
@@ -593,8 +669,62 @@ function initializeToolRegistry() {
   toolRegistry.set('memory_recall_context', (p) => recallContextForTask(p.task, p.repository));
   toolRegistry.set('memory_store', (p) => storeManualMemory(p));
   toolRegistry.set('memory_search', (p) => searchMemories(p));
+  toolRegistry.set('memory_related', (p) => getRelatedMemories(p.memoryId, p.limit));
+  toolRegistry.set('memory_reinforce', (p) => reinforceSuccessfulPattern(p.memoryId, p.boost));
+  toolRegistry.set('memory_forget', (p) => decayOldMemories(p.olderThanDays, p.belowImportance));
   toolRegistry.set('memory_health', () => checkMemoryHealth().then(healthy => ({ healthy, url: process.env.SEMANTIC_MEMORY_URL || 'not configured' })));
   toolRegistry.set('memory_maintenance_schedule', () => getMemoryMaintenanceSchedule());
+
+  // v2.6.0: Render Integration for Auto-Fix
+  toolRegistry.set('render_connect', (p) => renderConnect(p.apiKey, p.webhookSecret));
+  toolRegistry.set('render_disconnect', () => renderDisconnect());
+  toolRegistry.set('render_status', () => ({ configured: isRenderConfigured(), autoFix: getRenderAutoFixStatus() }));
+  toolRegistry.set('render_list_services', () => renderListServices());
+  toolRegistry.set('render_list_deploys', (p) => renderListDeploys(p.serviceId, p.limit));
+  toolRegistry.set('render_get_build_logs', (p) => renderGetBuildLogs(p.serviceId, p.deployId));
+  toolRegistry.set('render_analyze_failure', async (p) => {
+    const failure = await renderGetLatestFailedDeploy(p.serviceId);
+    if (!failure.found) return failure;
+    return renderAnalyzeErrors(failure.logs);
+  });
+  toolRegistry.set('render_autofix_status', () => getRenderAutoFixStatus());
+  toolRegistry.set('render_set_autofix', (p) => setRenderAutoFixEnabled(p.enabled));
+  toolRegistry.set('render_add_monitored_service', (p) => addRenderMonitoredService(p.serviceId));
+  toolRegistry.set('render_remove_monitored_service', (p) => removeRenderMonitoredService(p.serviceId));
+  toolRegistry.set('render_trigger_autofix', async (p) => {
+    // Manual trigger for auto-fix on a specific service
+    const failure = await renderGetLatestFailedDeploy(p.serviceId);
+    if (!failure.found) return { success: false, message: 'No recent failed deploy found' };
+    return startRenderAutoFix(
+      { serviceId: p.serviceId, deployId: failure.deploy.id, branch: failure.branch },
+      createJulesSession,
+      (sessionId, msg) => julesRequest('POST', `/sessions/${sessionId}:sendMessage`, msg)
+    );
+  });
+
+  // v2.6.0: Suggested Tasks
+  toolRegistry.set('jules_suggested_tasks', (p) => getSuggestedTasks(p.directory, {
+    types: p.types,
+    minPriority: p.minPriority,
+    limit: p.limit,
+    includeGitInfo: p.includeGitInfo
+  }));
+  toolRegistry.set('jules_fix_suggested_task', async (p) => {
+    // Get suggested tasks and find the one at the specified index
+    const result = getSuggestedTasks(p.directory, { limit: 100 });
+    if (p.taskIndex < 0 || p.taskIndex >= result.tasks.length) {
+      return { success: false, error: `Invalid task index: ${p.taskIndex}. Found ${result.tasks.length} tasks.` };
+    }
+    const task = result.tasks[p.taskIndex];
+    const prompt = generateSuggestedTaskFixPrompt(task, p.directory);
+    return createJulesSession({
+      prompt,
+      source: p.source,
+      title: `Fix ${task.type}: ${task.text.substring(0, 50)}...`,
+      automationMode: 'AUTO_CREATE_PR'
+    });
+  });
+  toolRegistry.set('jules_clear_suggested_cache', () => clearSuggestedTasksCache());
 }
 
 // MCP Protocol - Execute tool with O(1) registry lookup
@@ -1180,6 +1310,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('MCP Tools: http://localhost:' + PORT + '/mcp/tools');
   console.log('Jules API Key configured: ' + (JULES_API_KEY ? 'Yes' : 'No'));
   console.log('GitHub Token configured: ' + (GITHUB_TOKEN ? 'Yes' : 'No'));
+
+  // Start Render webhook cleanup interval
+  startRenderCleanupInterval();
 
   // Initialize modules after server starts
   batchProcessor = new BatchProcessor(julesRequest, createJulesSession);
