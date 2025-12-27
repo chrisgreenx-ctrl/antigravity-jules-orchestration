@@ -840,7 +840,8 @@ app.get('/mcp', async (req, res) => {
 
     console.log('[MCP] Creating transport...');
     // Allow SSEServerTransport to generate the session ID
-    const transport = new SSEServerTransport('/mcp/messages', res);
+    // Use relative path to ensure proxy prefixes are preserved
+    const transport = new SSEServerTransport('mcp/messages', res);
 
     console.log('[MCP] Getting session ID...');
     // Get the ID it generated
