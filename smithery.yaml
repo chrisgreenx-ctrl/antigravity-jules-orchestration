@@ -1,4 +1,2 @@
 runtime: typescript
-env:
-  npm_config_legacy_peer_deps: "true"
-  npm_config_update_notifier: "false"
+startCommand: node .smithery/index.cjs
