@@ -2,7 +2,7 @@ services:
   - type: web
     name: jules-orchestrator
     runtime: node
-    buildCommand: npm install && npm run build
+    buildCommand: npm install -g npm@latest && npm install && npm run build
     startCommand: npm start
     region: oregon
     healthCheckPath: /api/v1/health
