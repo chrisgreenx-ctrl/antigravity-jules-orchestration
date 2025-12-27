@@ -262,6 +262,15 @@ app.use((req, res, next) => {
   next();
 });
 
+// .well-known/mcp-config endpoint for Smithery discovery
+app.get('/.well-known/mcp-config', (req, res) => {
+  res.json({
+    sse: {
+      endpoint: 'mcp/messages' // Use relative path to support proxies
+    }
+  });
+});
+
 // Root endpoint - service metadata
 app.get('/', (req, res) => {
   res.json({
