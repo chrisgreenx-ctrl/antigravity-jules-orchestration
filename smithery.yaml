@@ -1,7 +1,11 @@
 runtime: "container"
 build:
-  dockerfile: "Dockerfile"
+  dockerfile: "docker/Dockerfile"
   dockerBuildPath: "."
+env:
+  NODE_ENV: "production"
+  DEBUG: "true"
+  LOG_LEVEL: "info"
 startCommand:
   type: "http"
   configSchema:

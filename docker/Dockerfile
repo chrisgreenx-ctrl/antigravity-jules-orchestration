@@ -8,7 +8,6 @@ RUN npm ci --legacy-peer-deps
 
 # Copy source code
 COPY . .
-
 # Build with esbuild (NOT @smithery/cli - avoids libsecret requirement)
 RUN npm run build
 
