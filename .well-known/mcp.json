@@ -1,0 +1,16 @@
+{
+    "name": "antigravity-jules-orchestration",
+    "version": "2.6.1",
+    "description": "MCP server for Jules API integration with Antigravity - enables autonomous AI coding sessions, batch processing, and GitHub issue automation",
+    "author": "Scarmonit",
+    "homepage": "https://github.com/chrisgreenx-ctrl/antigravity-jules-orchestration",
+    "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false
+    },
+    "transports": [
+        "http"
+    ],
+    "protocolVersion": "2024-11-05"
+}
