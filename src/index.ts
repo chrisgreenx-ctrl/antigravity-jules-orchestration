@@ -142,7 +142,9 @@ function createMcpServer({ config }: { config: any }) {
 }
 
 // Use Smithery SDK to create the HTTP server (bypasses @smithery/cli)
-const statelessServer = createStatelessServer(createMcpServer);
+const statelessServer = createStatelessServer(createMcpServer, {
+  schema: configSchema
+});
 statelessServer.app.listen(process.env.PORT || 8081, () => {
   console.log(`> Server starting on port ${process.env.PORT || 8081}`);
   console.log(`> MCP endpoint available at /mcp`);

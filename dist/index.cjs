@@ -81793,7 +81793,9 @@ function createMcpServer({ config: config2 }) {
   );
   return server.server;
 }
-var statelessServer = createStatelessServer(createMcpServer);
+var statelessServer = createStatelessServer(createMcpServer, {
+  schema: configSchema
+});
 statelessServer.app.listen(process.env.PORT || 8081, () => {
   console.log(`> Server starting on port ${process.env.PORT || 8081}`);
   console.log(`> MCP endpoint available at /mcp`);
