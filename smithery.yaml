@@ -1,16 +1,4 @@
 runtime: typescript
-build:
-  dockerfile: "Dockerfile"
-  dockerBuildPath: "."
-startCommand:
-  type: "http"
-  configSchema:
-    type: "object"
-    properties:
-      JULES_API_KEY:
-        type: "string"
-        description: "Your Jules API Key"
-      GITHUB_TOKEN:
-        type: "string"
-        description: "Optional GitHub Token for repository access"
-    required: ["JULES_API_KEY"]
+env:
+  npm_config_legacy_peer_deps: "true"
+  npm_config_update_notifier: "false"
