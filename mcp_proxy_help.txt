@@ -1,0 +1,61 @@
+usage: mcp-proxy [-h] [--version] [-H KEY VALUE]
+                 [--transport {sse,streamablehttp}] [--verify-ssl [VALUE]]
+                 [--no-verify-ssl] [-e KEY VALUE] [--cwd CWD]
+                 [--pass-environment | --no-pass-environment]
+                 [--log-level LEVEL] [--debug | --no-debug]
+                 [--named-server NAME COMMAND_STRING]
+                 [--named-server-config FILE_PATH] [--port PORT] [--host HOST]
+                 [--stateless | --no-stateless] [--sse-port SSE_PORT]
+                 [--sse-host SSE_HOST]
+                 [--allow-origin ALLOW_ORIGIN [ALLOW_ORIGIN ...]]
+                 [command_or_url] [args ...]
+
+Start the MCP proxy in one of two possible modes: as a client or a server.
+
+positional arguments:
+  command_or_url        Command or URL to connect to. When a URL, will run an SSE/StreamableHTTP client. Otherwise, if --named-server is not used, this will be the command for the default stdio client. If --named-server is used, this argument is ignored for stdio mode unless no default server is desired. See corresponding options for more details.
+
+options:
+  -h, --help            show this help message and exit
+  --version             Show the version and exit
+
+SSE/StreamableHTTP client options:
+  -H, --headers KEY VALUE
+                        Headers to pass to the SSE server. Can be used multiple times.
+  --transport {sse,streamablehttp}
+                        The transport to use for the client. Default is SSE.
+  --verify-ssl [VALUE]  Control SSL verification when acting as a client. Use without a value to force verification, pass 'false' to disable, or provide a path to a PEM bundle.
+  --no-verify-ssl       Disable SSL verification (alias for --verify-ssl false).
+
+stdio client options:
+  args                  Any extra arguments to the command to spawn the default server. Ignored if only named servers are defined.
+  -e, --env KEY VALUE   Environment variables used when spawning the default server. Can be used multiple times. For named servers, environment is inherited or passed via --pass-environment.
+  --cwd CWD             The working directory to use when spawning the default server process. Named servers inherit the proxy's CWD.
+  --pass-environment, --no-pass-environment
+                        Pass through all environment variables when spawning all server processes.
+  --log-level LEVEL     Set the log level. Default is INFO.
+  --debug, --no-debug   Enable debug mode with detailed logging output. Equivalent to --log-level DEBUG. If both --debug and --log-level are provided, --debug takes precedence.
+  --named-server NAME COMMAND_STRING
+                        Define a named stdio server. NAME is for the URL path /servers/NAME/. COMMAND_STRING is a single string with the command and its arguments (e.g., 'uvx mcp-server-fetch --timeout 10'). These servers inherit the proxy's CWD and environment from --pass-environment.
+  --named-server-config FILE_PATH
+                        Path to a JSON configuration file for named stdio servers. If provided, this will be the exclusive source for named server definitions, and any --named-server CLI arguments will be ignored.
+
+SSE server options:
+  --port PORT           Port to expose an SSE server on. Default is a random port
+  --host HOST           Host to expose an SSE server on. Default is 127.0.0.1
+  --stateless, --no-stateless
+                        Enable stateless mode for streamable http transports. Default is False
+  --sse-port SSE_PORT   (deprecated) Same as --port
+  --sse-host SSE_HOST   (deprecated) Same as --host
+  --allow-origin ALLOW_ORIGIN [ALLOW_ORIGIN ...]
+                        Allowed origins for the SSE server. Can be used multiple times. Default is no CORS allowed.
+
+Examples:
+  mcp-proxy http://localhost:8080/sse
+  mcp-proxy --no-verify-ssl https://server.local/sse
+  mcp-proxy --transport streamablehttp http://localhost:8080/mcp
+  mcp-proxy --headers Authorization 'Bearer YOUR_TOKEN' http://localhost:8080/sse
+  mcp-proxy --port 8080 -- your-command --arg1 value1 --arg2 value2
+  mcp-proxy --named-server fetch 'uvx mcp-server-fetch' --port 8080
+  mcp-proxy your-command --port 8080 -e KEY VALUE -e ANOTHER_KEY ANOTHER_VALUE
+  mcp-proxy your-command --port 8080 --allow-origin='*'

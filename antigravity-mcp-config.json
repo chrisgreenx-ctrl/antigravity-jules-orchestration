@@ -3,7 +3,7 @@
     "temporal-agent": {
       "name": "Temporal Agent MCP Server",
       "description": "Persistent task scheduling for AI agents - enables scheduled Jules sessions",
-      "baseUrl": "${TEMPORAL_AGENT_URL:-http://localhost:3324}",
+      "serverUrl": "${TEMPORAL_AGENT_URL:-http://localhost:3324}",
       "baseUrlProduction": "https://temporal-agent-mcp.onrender.com",
       "protocol": "https",
       "apiVersion": "1.0.0",
@@ -42,7 +42,7 @@
     "jules-orchestration": {
       "name": "Jules Orchestration MCP Server",
       "description": "Autonomous AI orchestration server combining Google Antigravity with Jules API",
-      "baseUrl": "https://scarmonit.com",
+      "serverUrl": "https://scarmonit.com",
       "protocol": "https",
       "apiVersion": "1.0.0",
       "endpoints": {
@@ -101,7 +101,11 @@
       "workflows": {
         "autonomous": {
           "enabled": true,
-          "triggers": ["github-push", "api-request", "schedule"],
+          "triggers": [
+            "github-push",
+            "api-request",
+            "schedule"
+          ],
           "approvalRequired": true
         },
         "ci-cd": {

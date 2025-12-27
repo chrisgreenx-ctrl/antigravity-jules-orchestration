@@ -9,7 +9,7 @@ if (!global.fetch) {
 }
 
 async function testMCPSSE() {
-    const url = new URL("http://localhost:3323/mcp");
+    const url = new URL("http://localhost:3324/mcp");
     console.log(`Connecting to MCP SSE server at ${url.href}...`);
 
     const transport = new SSEClientTransport(url);
@@ -33,7 +33,14 @@ async function testMCPSSE() {
 
         console.log("Listing tools...");
         const tools = await client.listTools();
-        console.log("Available tools:", tools.tools.map(t => t.name).join(", "));
+        console.log('Available tools:', tools.tools.map(t => t.name).join(', '));
+
+        console.log('\nCalling jules_list_sources...');
+        const sources = await client.callTool({
+            name: 'jules_list_sources',
+            arguments: {}
+        });
+        console.log('Sources result:', JSON.stringify(sources, null, 2));
 
         // Test a simple tool call if available
         if (tools.tools.includes('jules_list_sessions')) {

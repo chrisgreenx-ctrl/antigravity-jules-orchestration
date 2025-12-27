@@ -1,0 +1,17 @@
+Jules MCP Server v2.6.0 running on port 3323
+Health check: http://localhost:3323/health
+MCP Tools: http://localhost:3323/mcp/tools
+Jules API Key configured: Yes
+GitHub Token configured: Yes
+Modules initialized: BatchProcessor, SessionMonitor, ToolRegistry (68 tools)
+[MCP] Received message for session undefined
+[MCP] New SSE connection request
+[MCP] Created session 2e72cfd1-e549-4bc5-ac4c-c7bfe382ce7b
+[MCP] Received message for session 6c017fe4-a162-4f73-8e2a-af6ccaf540fb
+[MCP] Session 6c017fe4-a162-4f73-8e2a-af6ccaf540fb not found
+[MCP] SSE connection closed for session 2e72cfd1-e549-4bc5-ac4c-c7bfe382ce7b
+[MCP] New SSE connection request
+[MCP] Created session 1661d7d4-6ed0-4271-8590-c07355a67cbd
+[MCP] Received message for session 29446ccb-5166-46a7-8d38-8a33690598bb
+[MCP] Session 29446ccb-5166-46a7-8d38-8a33690598bb not found
+[MCP] SSE connection closed for session 1661d7d4-6ed0-4271-8590-c07355a67cbd

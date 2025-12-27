@@ -1,4 +1,4 @@
-﻿# Dependency Security Scan Instructions
+# Dependency Security Scan Instructions
 
 ## NPM Audit
 npm audit --audit-level=moderate --json > audit-report.json

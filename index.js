@@ -61,7 +61,7 @@ const julesAgent = new https.Agent({
   maxFreeSockets: 5
 });
 
-const PORT = process.env.PORT || 3323;
+const PORT = process.env.PORT || 3324;
 const JULES_API_KEY = process.env.JULES_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
 const VERSION = '2.6.0';
@@ -157,10 +157,17 @@ async function retryWithBackoff(fn, options = {}) {
 }
 
 const app = express();
+
+// Global Request Logger
+app.use((req, res, next) => {
+  console.log(`[HTTP] ${req.method} ${req.url} from ${req.ip}`);
+  next();
+});
+
 // Preserve raw body for webhook signature verification
 // Skip for MCP messages which need stream
 app.use((req, res, next) => {
-  if (req.path === '/mcp/messages') {
+  if (req.path.includes('/mcp/messages')) {
     return next();
   }
   express.json({
@@ -235,27 +242,18 @@ app.use('/mcp/', (req, res, next) => {
 let batchProcessor = null;
 let sessionMonitor = null;
 
-// Initialize MCP Server
-const mcpServer = new Server({
-  name: 'antigravity-orchestrator',
-  version: VERSION
-}, {
-  capabilities: {
-    tools: {},
-    resources: {}
-  }
-});
+// Initialize MCP Server - MOVED to per-connection to support multiple independent sessions
+// const mcpServer = new Server(...)
 
 let transports = new Map();
+let servers = new Map(); // Keep server instances alive
 
 // CORS - Secure whitelist configuration
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5173,https://antigravity-jules-orchestration.onrender.com').split(',');
 
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (ALLOWED_ORIGINS.includes(origin) || !origin) {
-    res.header('Access-Control-Allow-Origin', origin || '*');
-  }
+  // Permissive CORS for MCP Agents
+  res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-Request-ID, Authorization');
   res.header('Access-Control-Allow-Credentials', 'true');
@@ -384,6 +382,28 @@ app.post('/webhooks/render', async (req, res) => {
 });
 
 // ============ MCP TOOLS ============
+
+// Direct tool execution endpoint (stateless)
+app.post('/mcp/execute', async (req, res) => {
+  const { tool, parameters } = req.body;
+
+  if (process.env.LOG_LEVEL === 'debug') {
+    console.log(`[Execute] Request: ${tool}`, JSON.stringify(parameters));
+  }
+
+  if (!tool) return res.status(400).json({ error: 'Missing tool name' });
+
+  const handler = toolRegistry.get(tool);
+  if (!handler) return res.status(404).json({ error: `Tool not found: ${tool}` });
+
+  try {
+    const result = await handler(parameters || {});
+    res.json(result);
+  } catch (error) {
+    console.error(`[Execute] Error running ${tool}:`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // MCP Protocol - List available tools
 app.get('/mcp/tools', (req, res) => {
@@ -755,14 +775,15 @@ function initializeToolRegistry() {
   });
   toolRegistry.set('jules_clear_suggested_cache', () => clearSuggestedTasksCache());
 
-  // Initialize standard MCP handlers
-  setupMCPHandlers();
+  // Initialize standard MCP handlers - MOVED to per-connection
+  // setupMCPHandlers();
 }
 
 
 // Register tools with standard MCP server
-function setupMCPHandlers() {
-  mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
+function setupMCPHandlers(server) {
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    console.log('[MCP] Handling ListToolsRequest');
     return {
       tools: Array.from(toolRegistry.keys()).map(toolName => ({
         name: toolName,
@@ -772,9 +793,11 @@ function setupMCPHandlers() {
     };
   });
 
-  mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
     const toolParams = request.params.arguments || {};
+    console.log(`[MCP] Handling CallToolRequest: ${toolName}`, JSON.stringify(toolParams));
+
     const handler = toolRegistry.get(toolName);
 
     if (!handler) {
@@ -788,9 +811,9 @@ function setupMCPHandlers() {
   });
 
   // Required handlers for full compliance even if empty
-  mcpServer.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [] }));
-  mcpServer.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [] }));
-  mcpServer.setRequestHandler(ReadResourceRequestSchema, async () => { throw new Error('Not implemented'); });
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [] }));
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [] }));
+  server.setRequestHandler(ReadResourceRequestSchema, async () => { throw new Error('Not implemented'); });
 }
 
 // ============ MCP SSE ROUTES ============
@@ -798,18 +821,50 @@ function setupMCPHandlers() {
 app.get('/mcp', async (req, res) => {
   console.log('[MCP] New SSE connection request');
 
-  const sessionId = crypto.randomUUID();
-  const transport = new SSEServerTransport(`/mcp/messages?sessionId=${sessionId}`, res);
-  transports.set(sessionId, transport);
+  try {
+    console.log('[MCP] Creating server instance...');
+    // Create per-connection MCP Server instance
+    const server = new Server({
+      name: 'antigravity-orchestrator',
+      version: VERSION
+    }, {
+      capabilities: {
+        tools: {},
+        resources: {}
+      }
+    });
 
-  console.log(`[MCP] Created session ${sessionId}`);
+    console.log('[MCP] Setting up handlers...');
+    // Setup handlers for this specific server instance
+    setupMCPHandlers(server);
 
-  transport.onclose = () => {
-    console.log(`[MCP] SSE connection closed for session ${sessionId}`);
-    transports.delete(sessionId);
-  };
+    console.log('[MCP] Creating transport...');
+    // Allow SSEServerTransport to generate the session ID
+    const transport = new SSEServerTransport('/mcp/messages', res);
 
-  await mcpServer.connect(transport);
+    console.log('[MCP] Getting session ID...');
+    // Get the ID it generated
+    const sessionId = transport.sessionId;
+
+    console.log(`[MCP] Registering transport for session ${sessionId}...`);
+    transports.set(sessionId, transport);
+    servers.set(sessionId, server); // Persist server instance for this session
+
+    console.log(`[MCP] Created session ${sessionId}`);
+
+    transport.onclose = () => {
+      console.log(`[MCP] SSE connection closed for session ${sessionId}`);
+      transports.delete(sessionId);
+      servers.delete(sessionId);
+    };
+
+    console.log('[MCP] Connecting server...');
+    await server.connect(transport);
+    console.log('[MCP] Server connected!');
+  } catch (error) {
+    console.error('[MCP] Error initializing connection:', error);
+    res.status(500).end();
+  }
 });
 
 app.post('/mcp/messages', async (req, res) => {
@@ -822,7 +877,14 @@ app.post('/mcp/messages', async (req, res) => {
 
   const transport = transports.get(sessionId);
   if (transport) {
-    await transport.handlePostMessage(req, res);
+    // If body was parsed by middleware (e.g. accidental match), pass it
+    // Otherwise transport reads stream
+    if (req.body && Object.keys(req.body).length > 0) {
+      console.log(`[MCP] passing parsed body for session ${sessionId}`);
+      await transport.handlePostMessage(req, res, req.body);
+    } else {
+      await transport.handlePostMessage(req, res);
+    }
   } else {
     console.log(`[MCP] Session ${sessionId} not found`);
     res.status(404).send('Session not found');
@@ -1378,23 +1440,23 @@ app.use((req, res) => {
   });
 });
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log('Jules MCP Server v' + VERSION + ' running on port ' + PORT);
-  console.log('Health check: http://localhost:' + PORT + '/health');
-  console.log('MCP Tools: http://localhost:' + PORT + '/mcp/tools');
-  console.log('Jules API Key configured: ' + (JULES_API_KEY ? 'Yes' : 'No'));
-  console.log('GitHub Token configured: ' + (GITHUB_TOKEN ? 'Yes' : 'No'));
+const server = app.listen(PORT, () => {
+  console.log(`Jules MCP Server v${VERSION} running on port ${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`MCP Tools: http://localhost:${PORT}/mcp/tools`);
+  console.log(`Jules API Key configured: ${JULES_API_KEY ? 'Yes' : 'No'}`);
+  console.log(`GitHub Token configured: ${GITHUB_TOKEN ? 'Yes' : 'No'}`);
 
-  // Start Render webhook cleanup interval
+  initializeToolRegistry();
+
+  // Initialize modules
+  batchProcessor = new BatchProcessor();
+  sessionMonitor = new SessionMonitor();
+
+  // Start cleanup interval for auto-fix monitoring
   startRenderCleanupInterval();
 
-  // Initialize modules after server starts
-  batchProcessor = new BatchProcessor(julesRequest, createJulesSession);
-  sessionMonitor = new SessionMonitor(julesRequest);
-
-  // Initialize O(1) tool registry (must be after batchProcessor/sessionMonitor)
-  initializeToolRegistry();
-  console.log('Modules initialized: BatchProcessor, SessionMonitor, ToolRegistry (' + toolRegistry.size + ' tools)');
+  console.log(`Modules initialized: BatchProcessor, SessionMonitor, ToolRegistry (${toolRegistry.size} tools)`);
 });
 
 process.on('SIGTERM', () => {

@@ -1,4 +1,4 @@
-﻿# Multi-stage Dockerfile for antigravity-jules
+# Multi-stage Dockerfile for antigravity-jules
 
 # Build stage
 FROM node:20-alpine AS builder

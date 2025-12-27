@@ -20,7 +20,7 @@ To use the Jules orchestration tools within Claude Desktop, edit your configurat
       "command": "npx",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-sse-client",
+        "@gonzaloafidalgo/mcp-sse-bridge",
         "--url",
         "https://scarmonit.com/mcp/sse"
       ]

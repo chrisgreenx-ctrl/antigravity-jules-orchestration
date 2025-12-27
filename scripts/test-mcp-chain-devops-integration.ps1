@@ -1,19 +1,19 @@
-﻿# Auto-diagnostics guard
-if (!$env:AUTO_DIAG) {
-    $env:AUTO_DIAG = 1
-    & "$PSScriptRoot/quick-check.ps1"
-    if ($LASTEXITCODE -ne 0) { exit 1 }
-}
-
-# Test MCP Tool Chain: DevOps + Jules Integration
+﻿# Test MCP Tool Chain: DevOps + Jules Integration
 # Chain: init_project → create_github_workflow → create_optimized_dockerfile → health_check
 
 param(
-    [string]$Cloud = "aws",
-    [string]$Region = "us-east-1",
-    [string]$AppName = "antigravity-jules",
-    [string]$OutputDir = "./generated-artifacts"
+  [string]$Cloud = "aws",
+  [string]$Region = "us-east-1",
+  [string]$AppName = "antigravity-jules",
+  [string]$OutputDir = "./generated-artifacts"
 )
+
+# Auto-diagnostics guard
+if (!$env:AUTO_DIAG) {
+  $env:AUTO_DIAG = 1
+  & "$PSScriptRoot/quick-check.ps1"
+  if ($LASTEXITCODE -ne 0) { exit 1 }
+}
 
 $ErrorActionPreference = "Stop"
 
@@ -25,16 +25,16 @@ function Write-Failure { param([string]$Message) Write-Host "❌ $Message" -Fore
 
 # Create output directory
 if (-not (Test-Path $OutputDir)) {
-    New-Item -ItemType Directory -Path $OutputDir | Out-Null
-    Write-Info "Created output directory: $OutputDir"
+  New-Item -ItemType Directory -Path $OutputDir | Out-Null
+  Write-Info "Created output directory: $OutputDir"
 }
 
 # Chain execution state
 $ChainState = @{
-    StartTime = Get-Date
-    Steps = @()
-    Artifacts = @()
-    Errors = @()
+  StartTime = Get-Date
+  Steps     = @()
+  Artifacts = @()
+  Errors    = @()
 }
 
 # Note: These tools would be called via MCP client in production
@@ -309,21 +309,21 @@ Write-Host "`n--- STEP 6: DevOps Health Check ---`n" -ForegroundColor Cyan
 Write-Info "Invoking: health_check"
 
 $healthStatus = @{
-    timestamp = (Get-Date).ToString("o")
-    status = @(
-        @{ tool = "git"; available = (Get-Command git -ErrorAction SilentlyContinue) -ne $null }
-        @{ tool = "node"; available = (Get-Command node -ErrorAction SilentlyContinue) -ne $null }
-        @{ tool = "npm"; available = (Get-Command npm -ErrorAction SilentlyContinue) -ne $null }
-        @{ tool = "docker"; available = (Get-Command docker -ErrorAction SilentlyContinue) -ne $null }
-        @{ tool = "kubectl"; available = (Get-Command kubectl -ErrorAction SilentlyContinue) -ne $null }
-    )
+  timestamp = (Get-Date).ToString("o")
+  status    = @(
+    @{ tool = "git"; available = (Get-Command git -ErrorAction SilentlyContinue) -ne $null }
+    @{ tool = "node"; available = (Get-Command node -ErrorAction SilentlyContinue) -ne $null }
+    @{ tool = "npm"; available = (Get-Command npm -ErrorAction SilentlyContinue) -ne $null }
+    @{ tool = "docker"; available = (Get-Command docker -ErrorAction SilentlyContinue) -ne $null }
+    @{ tool = "kubectl"; available = (Get-Command kubectl -ErrorAction SilentlyContinue) -ne $null }
+  )
 }
 
 Write-Host "Tool Availability:" -ForegroundColor Gray
 $healthStatus.status | ForEach-Object {
-    $icon = if ($_.available) { "✅" } else { "❌" }
-    $status = if ($_.available) { "Available" } else { "Not Found" }
-    Write-Host "  $icon $($_.tool): $status"
+  $icon = if ($_.available) { "✅" } else { "❌" }
+  $status = if ($_.available) { "Available" } else { "Not Found" }
+  Write-Host "  $icon $($_.tool): $status"
 }
 
 # STEP 7: Security Dependency Scan
@@ -370,7 +370,7 @@ Write-Info "Artifacts Generated: $($ChainState.Artifacts.Count)"
 
 Write-Host "`nGenerated Artifacts:" -ForegroundColor Cyan
 $ChainState.Artifacts | ForEach-Object {
-    Write-Host "  📄 $_" -ForegroundColor Gray
+  Write-Host "  📄 $_" -ForegroundColor Gray
 }
 
 Write-Host "`nNext Steps:" -ForegroundColor Yellow

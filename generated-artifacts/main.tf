@@ -1,4 +1,4 @@
-﻿# Generated Terraform Configuration
+# Generated Terraform Configuration
 # Cloud: aws
 # Region: us-east-1
 

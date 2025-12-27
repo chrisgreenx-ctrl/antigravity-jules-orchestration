@@ -1,0 +1,6 @@
+Jules MCP Server v2.6.0 running on port 3324
+Health check: http://localhost:3324/health
+MCP Tools: http://localhost:3324/mcp/tools
+Jules API Key configured: Yes
+GitHub Token configured: Yes
+Modules initialized: BatchProcessor, SessionMonitor, ToolRegistry (68 tools)

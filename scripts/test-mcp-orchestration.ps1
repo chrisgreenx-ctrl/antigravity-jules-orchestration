@@ -1,24 +1,24 @@
-﻿# Auto-diagnostics guard
+﻿# MCP Tool Chain Orchestration Master Script
+# Executes all MCP tool chain demonstrations with unified traceId correlation
+
+param(
+    [Parameter(HelpMessage = "Which chains to test")]
+    [ValidateSet("all", "jules-session", "devops-integration", "system-diagnostics")]
+    [string]$Chain = "all",
+
+    [Parameter(HelpMessage = "Generate detailed reports")]
+    [switch]$Detailed,
+
+    [Parameter(HelpMessage = "Run in interactive mode")]
+    [bool]$Interactive = $true
+)
+
+# Auto-diagnostics guard
 if (!$env:AUTO_DIAG) {
     $env:AUTO_DIAG = 1
     & "$PSScriptRoot/quick-check.ps1"
     if ($LASTEXITCODE -ne 0) { exit 1 }
 }
-
-# MCP Tool Chain Orchestration Master Script
-# Executes all MCP tool chain demonstrations with unified traceId correlation
-
-param(
-    [Parameter(HelpMessage="Which chains to test")]
-    [ValidateSet("all", "jules-session", "devops-integration", "system-diagnostics")]
-    [string]$Chain = "all",
-
-    [Parameter(HelpMessage="Generate detailed reports")]
-    [switch]$Detailed = $false,
-
-    [Parameter(HelpMessage="Run in interactive mode")]
-    [switch]$Interactive = $true
-)
 
 $ErrorActionPreference = "Stop"
 
@@ -43,12 +43,12 @@ function Write-ChainLog {
     )
 
     $logEntry = @{
-        timestamp = (Get-Date).ToString("o")
-        level = $Level.ToUpper()
-        message = $Message
+        timestamp     = (Get-Date).ToString("o")
+        level         = $Level.ToUpper()
+        message       = $Message
         orchestration = "master"
-        traceId = $script:TraceId
-        chain = $script:CurrentChain
+        traceId       = $script:TraceId
+        chain         = $script:CurrentChain
     }
 
     foreach ($key in $Context.Keys) {
@@ -60,15 +60,15 @@ function Write-ChainLog {
     # Console output (pretty format for humans)
     $icon = switch ($Level) {
         "error" { "❌" }
-        "warn"  { "⚠️ " }
-        "info"  { "ℹ️ " }
+        "warn" { "⚠️ " }
+        "info" { "ℹ️ " }
         default { "📝" }
     }
 
     $color = switch ($Level) {
         "error" { "Red" }
-        "warn"  { "Yellow" }
-        "info"  { "Cyan" }
+        "warn" { "Yellow" }
+        "info" { "Cyan" }
         default { "Gray" }
     }
 
@@ -90,7 +90,7 @@ $script:CurrentChain = "orchestration-master"
 $script:LogFile = "mcp-orchestration-$(Get-Date -Format 'yyyy-MM-dd-HHmmss').log"
 
 Write-ChainLog -Level "info" -Message "MCP Tool Discovery & Orchestration Framework" -Context @{
-    version = "2.0.0"
+    version            = "2.0.0"
     correlationEnabled = $true
 }
 
@@ -103,10 +103,10 @@ Write-Host ""
 # Orchestration state
 $orchestration = @{
     StartTime = Get-Date
-    TraceId = $script:TraceId
-    Chains = @()
-    Results = @{}
-    LogFile = $script:LogFile
+    TraceId   = $script:TraceId
+    Chains    = @()
+    Results   = @{}
+    LogFile   = $script:LogFile
 }
 
 # Display available chains
@@ -123,26 +123,26 @@ Write-Host ""
 
 # Define chain configurations
 $chainConfigs = @{
-    "jules-session" = @{
-        Name = "Jules Session Lifecycle"
-        Script = "test-mcp-chain-jules-session-v2.ps1"  # switched to v2 script
-        Duration = "2-30 minutes"
+    "jules-session"      = @{
+        Name         = "Jules Session Lifecycle"
+        Script       = "test-mcp-chain-jules-session-v2.ps1"  # switched to v2 script
+        Duration     = "2-30 minutes"
         RequiresAuth = $true
-        Interactive = $true
+        Interactive  = $true
     }
     "devops-integration" = @{
-        Name = "DevOps Integration"
-        Script = "test-mcp-chain-devops-integration.ps1"
-        Duration = "1-2 minutes"
+        Name         = "DevOps Integration"
+        Script       = "test-mcp-chain-devops-integration.ps1"
+        Duration     = "1-2 minutes"
         RequiresAuth = $false
-        Interactive = $false
+        Interactive  = $false
     }
     "system-diagnostics" = @{
-        Name = "System Diagnostics"
-        Script = "test-mcp-chain-system-diagnostics.ps1"
-        Duration = "30 seconds"
+        Name         = "System Diagnostics"
+        Script       = "test-mcp-chain-system-diagnostics.ps1"
+        Duration     = "30 seconds"
         RequiresAuth = $false
-        Interactive = $false
+        Interactive  = $false
     }
 }
 
@@ -158,7 +158,8 @@ if ($Chain -eq "all") {
             $chainsToRun += "jules-session"
         }
     }
-} else {
+}
+else {
     $chainsToRun = @($Chain)
 }
 
@@ -216,35 +217,37 @@ foreach ($chainKey in $chainsToRun) {
 
         $script:CurrentChain = $chainKey
         Write-ChainLog -Level "info" -Message "Starting chain execution" -Context @{
-            chain = $chainKey
-            chainName = $config.Name
+            chain             = $chainKey
+            chainName         = $config.Name
             estimatedDuration = $config.Duration
         }
 
         # Execute the chain script with traceId propagation
         if ($Detailed) {
             & $scriptPath -Detailed -TraceId $script:TraceId -ParentChain "orchestration-master"
-        } else {
+        }
+        else {
             & $scriptPath -TraceId $script:TraceId -ParentChain "orchestration-master"
         }
 
         $chainDuration = (Get-Date) - $chainStart
 
         $orchestration.Results[$chainKey] = @{
-            Status = "Completed"
-            Duration = $chainDuration.TotalSeconds
+            Status    = "Completed"
+            Duration  = $chainDuration.TotalSeconds
             Timestamp = Get-Date
         }
 
         Write-ChainLog -Level "info" -Message "Chain completed successfully" -Context @{
-            chain = $chainKey
+            chain    = $chainKey
             duration = $chainDuration.TotalSeconds
-            status = "success"
+            status   = "success"
         }
 
         Write-Success "Chain completed in $([math]::Round($chainDuration.TotalSeconds, 2))s"
 
-    } catch {
+    }
+    catch {
         Write-ChainLog -Level "error" -Message "Chain execution failed" -Context @{
             chain = $chainKey
             error = $_.Exception.Message
@@ -253,8 +256,8 @@ foreach ($chainKey in $chainsToRun) {
         Write-Failure "Chain failed: $($_.Exception.Message)"
 
         $orchestration.Results[$chainKey] = @{
-            Status = "Failed"
-            Error = $_.Exception.Message
+            Status    = "Failed"
+            Error     = $_.Exception.Message
             Timestamp = Get-Date
         }
     }
@@ -338,8 +341,10 @@ Write-Host "`n"
 # Exit code based on success rate
 if ($successRate -eq 100) {
     exit 0
-} elseif ($successRate -ge 50) {
+}
+elseif ($successRate -ge 50) {
     exit 1
-} else {
+}
+else {
     exit 2
 }
