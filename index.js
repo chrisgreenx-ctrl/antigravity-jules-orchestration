@@ -4,6 +4,15 @@ import https from 'https';
 import { getIssue, getIssuesByLabel, formatIssueForPrompt } from './lib/github.js';
 import { BatchProcessor } from './lib/batch.js';
 import { SessionMonitor } from './lib/monitor.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
+  ReadResourceRequestSchema
+} from '@modelcontextprotocol/sdk/types.js';
 import { ollamaCompletion, listOllamaModels, ollamaCodeGeneration, ollamaChat } from './lib/ollama.js';
 import { ragIndexDirectory, ragQuery, ragStatus, ragClear } from './lib/rag.js';
 import {
@@ -148,16 +157,22 @@ async function retryWithBackoff(fn, options = {}) {
 
 const app = express();
 // Preserve raw body for webhook signature verification
-app.use(express.json({
-  limit: '1mb',
-  strict: true,
-  verify: (req, res, buf) => {
-    // Store raw body for webhook signature verification
-    if (req.url.startsWith('/webhooks/')) {
-      req.rawBody = buf.toString('utf8');
-    }
+// Skip for MCP messages which need stream
+app.use((req, res, next) => {
+  if (req.path === '/mcp/messages') {
+    return next();
   }
-}));
+  express.json({
+    limit: '1mb',
+    strict: true,
+    verify: (req, res, buf) => {
+      // Store raw body for webhook signature verification
+      if (req.url.startsWith('/webhooks/')) {
+        req.rawBody = buf.toString('utf8');
+      }
+    }
+  })(req, res, next);
+});
 
 // Circuit Breaker for Jules API
 const circuitBreaker = {
@@ -218,6 +233,19 @@ app.use('/mcp/', (req, res, next) => {
 // Initialize modules
 let batchProcessor = null;
 let sessionMonitor = null;
+
+// Initialize MCP Server
+const mcpServer = new Server({
+  name: 'antigravity-orchestrator',
+  version: VERSION
+}, {
+  capabilities: {
+    tools: {},
+    resources: {}
+  }
+});
+
+let sseTransport = null;
 
 // CORS - Secure whitelist configuration
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5173,https://antigravity-jules-orchestration.onrender.com').split(',');
@@ -725,35 +753,63 @@ function initializeToolRegistry() {
     });
   });
   toolRegistry.set('jules_clear_suggested_cache', () => clearSuggestedTasksCache());
+
+  // Initialize standard MCP handlers
+  setupMCPHandlers();
 }
 
-// MCP Protocol - Execute tool with O(1) registry lookup
-app.post('/mcp/execute', async (req, res) => {
-  const { tool, parameters = {} } = req.body;
 
-  if (!tool) {
-    return res.status(400).json({ error: 'Tool name required' });
-  }
+// Register tools with standard MCP server
+function setupMCPHandlers() {
+  mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
+    return {
+      tools: Array.from(toolRegistry.keys()).map(toolName => ({
+        name: toolName,
+        description: `Tool ${toolName} from Jules Orchestration`,
+        inputSchema: { type: 'object', properties: {} } // Minimal schema for now
+      }))
+    };
+  });
 
-  if (!JULES_API_KEY) {
-    return res.status(500).json({ error: 'JULES_API_KEY not configured' });
-  }
+  mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const toolName = request.params.name;
+    const toolParams = request.params.arguments || {};
+    const handler = toolRegistry.get(toolName);
 
-  // O(1) lookup instead of O(n) switch comparison
-  const handler = toolRegistry.get(tool);
-  if (!handler) {
-    return res.status(400).json({ error: 'Unknown tool: ' + tool });
-  }
+    if (!handler) {
+      throw new Error(`Unknown tool: ${toolName}`);
+    }
 
-  console.log('[MCP] Executing tool:', tool, parameters);
+    const result = await handler(toolParams);
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+    };
+  });
 
-  try {
-    const result = await handler(parameters);
-    console.log('[MCP] Tool', tool, 'completed successfully');
-    res.json({ success: true, result });
-  } catch (error) {
-    console.error('[MCP] Tool', tool, 'failed:', error.message);
-    res.status(500).json({ success: false, error: error.message });
+  // Required handlers for full compliance even if empty
+  mcpServer.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [] }));
+  mcpServer.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [] }));
+  mcpServer.setRequestHandler(ReadResourceRequestSchema, async () => { throw new Error('Not implemented'); });
+}
+
+// ============ MCP SSE ROUTES ============
+
+app.get('/mcp', async (req, res) => {
+  console.log('[MCP] New SSE connection request');
+  sseTransport = new SSEServerTransport('/mcp/messages', res);
+  await mcpServer.connect(sseTransport);
+
+  res.on('close', () => {
+    console.log('[MCP] SSE connection closed');
+  });
+});
+
+app.post('/mcp/messages', async (req, res) => {
+  console.log('[MCP] Received message');
+  if (sseTransport) {
+    await sseTransport.handlePostMessage(req, res);
+  } else {
+    res.status(400).send('No active SSE connection');
   }
 });
 
@@ -1124,7 +1180,8 @@ async function mergePr(owner, repo, prNumber, mergeMethod = 'squash') {
     throw new Error(`Invalid merge method: must be one of ${VALID_MERGE_METHODS.join(', ')}`);
   }
   return new Promise((resolve, reject) => {
-    const req = https.request({ hostname: 'api.github.com', path: `/repos/${owner}/${repo}/pulls/${prNumber}/merge`, method: 'PUT',
+    const req = https.request({
+      hostname: 'api.github.com', path: `/repos/${owner}/${repo}/pulls/${prNumber}/merge`, method: 'PUT',
       headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Jules-MCP-Server', 'Content-Type': 'application/json' }
     }, (res) => {
       let data = ''; res.on('data', chunk => data += chunk);
@@ -1166,7 +1223,8 @@ async function addPrComment(owner, repo, prNumber, comment) {
     throw new Error(`Comment exceeds maximum length of ${MAX_COMMENT_LENGTH} characters`);
   }
   return new Promise((resolve, reject) => {
-    const req = https.request({ hostname: 'api.github.com', path: `/repos/${owner}/${repo}/issues/${prNumber}/comments`, method: 'POST',
+    const req = https.request({
+      hostname: 'api.github.com', path: `/repos/${owner}/${repo}/issues/${prNumber}/comments`, method: 'POST',
       headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Jules-MCP-Server', 'Content-Type': 'application/json' }
     }, (res) => {
       let data = ''; res.on('data', chunk => data += chunk);
