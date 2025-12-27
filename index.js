@@ -1,6 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import https from 'https';
+import crypto from 'crypto';
 import { getIssue, getIssuesByLabel, formatIssueForPrompt } from './lib/github.js';
 import { BatchProcessor } from './lib/batch.js';
 import { SessionMonitor } from './lib/monitor.js';
@@ -245,7 +246,7 @@ const mcpServer = new Server({
   }
 });
 
-let sseTransport = null;
+let transports = new Map();
 
 // CORS - Secure whitelist configuration
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5173,https://antigravity-jules-orchestration.onrender.com').split(',');
@@ -796,20 +797,35 @@ function setupMCPHandlers() {
 
 app.get('/mcp', async (req, res) => {
   console.log('[MCP] New SSE connection request');
-  sseTransport = new SSEServerTransport('/mcp/messages', res);
-  await mcpServer.connect(sseTransport);
 
-  res.on('close', () => {
-    console.log('[MCP] SSE connection closed');
-  });
+  const sessionId = crypto.randomUUID();
+  const transport = new SSEServerTransport(`/mcp/messages?sessionId=${sessionId}`, res);
+  transports.set(sessionId, transport);
+
+  console.log(`[MCP] Created session ${sessionId}`);
+
+  transport.onclose = () => {
+    console.log(`[MCP] SSE connection closed for session ${sessionId}`);
+    transports.delete(sessionId);
+  };
+
+  await mcpServer.connect(transport);
 });
 
 app.post('/mcp/messages', async (req, res) => {
-  console.log('[MCP] Received message');
-  if (sseTransport) {
-    await sseTransport.handlePostMessage(req, res);
+  const sessionId = req.query.sessionId;
+  console.log(`[MCP] Received message for session ${sessionId}`);
+
+  if (!sessionId) {
+    return res.status(400).send('Missing sessionId query parameter');
+  }
+
+  const transport = transports.get(sessionId);
+  if (transport) {
+    await transport.handlePostMessage(req, res);
   } else {
-    res.status(400).send('No active SSE connection');
+    console.log(`[MCP] Session ${sessionId} not found`);
+    res.status(404).send('Session not found');
   }
 });
 
