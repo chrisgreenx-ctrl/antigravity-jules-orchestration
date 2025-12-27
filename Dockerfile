@@ -8,11 +8,14 @@ WORKDIR /app
 # A wildcard is used to ensure both package.json AND package-lock.json are copied
 COPY package*.json ./
 
-# Install production dependencies
-RUN npm ci --omit=dev --legacy-peer-deps
+# Install all dependencies (including dev for build)
+RUN npm ci --legacy-peer-deps
 
 # Bundle app source
 COPY . .
 
+# Build TypeScript
+RUN npm run build
+
 # Check for index.js location and start
-CMD ["node", "index.js"]
+CMD ["node", "dist/index.js"]

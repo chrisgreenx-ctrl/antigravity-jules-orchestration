@@ -1,8 +1,9 @@
+runtime: typescript
 startCommand:
   type: http
   command: node
   args:
-    - index.js
+    - dist/index.js
 configSchema:
   type: object
   required:
