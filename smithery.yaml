@@ -1,0 +1,16 @@
+startCommand:
+  type: http
+  command: node
+  args:
+    - index.js
+configSchema:
+  type: object
+  required:
+    - JULES_API_KEY
+  properties:
+    JULES_API_KEY:
+      type: string
+      description: Jules API Key
+    GITHUB_TOKEN:
+      type: string
+      description: GitHub Personal Access Token
