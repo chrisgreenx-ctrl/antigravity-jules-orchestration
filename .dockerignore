@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+*.md
+tests
+scripts
+mcp-*.log
+*.zip
+*.zim
+tmp
