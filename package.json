@@ -6,9 +6,9 @@
 	"module": "src/index.ts",
 	"type": "module",
 	"scripts": {
-		"build": "tsc",
+		"build": "npx smithery build",
 		"start": "node dist/index.js",
-		"dev": "tsx src/index.ts",
+		"dev": "npx smithery dev",
 		"test": "node --test tests/unit/*.test.js",
 		"test:unit": "node --test tests/unit/*.test.js",
 		"test:integration": "vitest run tests/integration",
