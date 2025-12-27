@@ -1,1 +1,4 @@
 runtime: "typescript"
+build:
+  command: "npm run build"
+startCommand: node dist/index.cjs

@@ -1,6 +1,7 @@
-import dotenv from 'dotenv';
+import { createStatelessServer } from '@smithery/sdk';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import dotenv from 'dotenv';
 
 dotenv.config();
 
@@ -15,9 +16,9 @@ export const configSchema = z.object({
 });
 
 /**
- * Required: Export default createServer function for Smithery
+ * Create MCP server function for Smithery SDK
  */
-export default function createServer({ config }: { config: any }) {
+function createMcpServer({ config }: { config: any }) {
   // Apply config to process.env so existing modules work
   if (config) {
     if (config.JULES_API_KEY) process.env.JULES_API_KEY = config.JULES_API_KEY;
@@ -25,13 +26,13 @@ export default function createServer({ config }: { config: any }) {
     if (config.LOG_LEVEL) process.env.LOG_LEVEL = config.LOG_LEVEL;
   }
 
-  // Create the MCP Server instance required by Smithery
+  // Create the MCP Server instance
   const server = new McpServer({
     name: "antigravity-jules-orchestration",
     version: VERSION
   });
 
-  // Register a simple health check tool first
+  // Register a simple health check tool
   server.tool(
     "health_check",
     "Check server health and configuration status",
@@ -139,3 +140,13 @@ export default function createServer({ config }: { config: any }) {
 
   return server.server;
 }
+
+// Use Smithery SDK to create the HTTP server (bypasses @smithery/cli)
+const statelessServer = createStatelessServer(createMcpServer);
+statelessServer.app.listen(process.env.PORT || 8081, () => {
+  console.log(`> Server starting on port ${process.env.PORT || 8081}`);
+  console.log(`> MCP endpoint available at /mcp`);
+});
+
+// Also export createServer for compatibility
+export default createMcpServer;

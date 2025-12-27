@@ -6,9 +6,9 @@
 	"module": "src/index.ts",
 	"type": "module",
 	"scripts": {
-		"build": "smithery build",
+		"build": "esbuild src/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/index.cjs --external:fsevents",
 		"start": "node dist/index.js",
-		"dev": "smithery dev",
+		"dev": "npx @smithery/cli dev --no-tunnel",
 		"test": "node --test tests/unit/*.test.js",
 		"test:unit": "node --test tests/unit/*.test.js",
 		"test:integration": "vitest run tests/integration",
