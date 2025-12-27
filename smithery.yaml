@@ -1,4 +1,15 @@
-runtime: container
 build:
   dockerfile: "Dockerfile"
   dockerBuildPath: "."
+startCommand:
+  type: "http"
+  configSchema:
+    type: "object"
+    properties:
+      JULES_API_KEY:
+        type: "string"
+        description: "Your Jules API Key"
+      GITHUB_TOKEN:
+        type: "string"
+        description: "Optional GitHub Token for repository access"
+    required: ["JULES_API_KEY"]
