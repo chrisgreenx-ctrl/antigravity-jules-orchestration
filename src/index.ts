@@ -1,15 +1,10 @@
-import express from 'express';
 import dotenv from 'dotenv';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { ToolDefinitions } from './tools/definitions.js';
-import { handlers } from './tools/handlers.js';
-import { LRUCache, SessionQueue } from './lib/infrastructure.js';
 
 dotenv.config();
 
 const VERSION = '2.6.1';
-const PORT = process.env.PORT || 3324;
 
 // Export config schema for Smithery to validate env vars
 export const configSchema = z.object({
@@ -17,9 +12,6 @@ export const configSchema = z.object({
   GITHUB_TOKEN: z.string().optional().describe("GitHub Personal Access Token"),
   PORT: z.any().optional(),
   LOG_LEVEL: z.string().optional(),
-  DATABASE_URL: z.string().optional(),
-  SEMANTIC_MEMORY_URL: z.string().optional(),
-  ALLOWED_ORIGINS: z.string().optional(),
 });
 
 /**
@@ -39,62 +31,111 @@ export default function createServer({ config }: { config: any }) {
     version: VERSION
   });
 
-  // Register all tools using the modularized definitions and handlers
-  for (const [name, def] of Object.entries(ToolDefinitions)) {
-    const handler = (handlers as any)[name];
-    if (handler) {
-      server.tool(
-        name,
-        def.description,
-        (def.schema as any).shape,
-        async (args) => {
-          try {
-            const result = await handler(args);
-            return {
-              content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }]
-            };
-          } catch (error: any) {
-            return {
-              content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+  // Register a simple health check tool first
+  server.tool(
+    "health_check",
+    "Check server health and configuration status",
+    {},
+    async () => ({
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          status: "ok",
+          version: VERSION,
+          timestamp: new Date().toISOString(),
+          configured: !!process.env.JULES_API_KEY
+        }, null, 2)
+      }]
+    })
+  );
+
+  // Register jules_list_sources
+  server.tool(
+    "jules_list_sources",
+    "List all connected GitHub repositories (sources)",
+    {},
+    async () => {
+      try {
+        const https = await import('https');
+        return new Promise((resolve) => {
+          const req = https.request({
+            hostname: 'jules.googleapis.com',
+            port: 443,
+            path: '/v1alpha/sources',
+            method: 'GET',
+            headers: {
+              'X-Goog-Api-Key': process.env.JULES_API_KEY || '',
+              'Content-Type': 'application/json'
+            }
+          }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+              resolve({
+                content: [{ type: "text" as const, text: data }]
+              });
+            });
+          });
+          req.on('error', (err) => {
+            resolve({
+              content: [{ type: "text" as const, text: `Error: ${err.message}` }],
               isError: true
-            };
-          }
-        }
-      );
+            });
+          });
+          req.end();
+        });
+      } catch (error: any) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+          isError: true
+        };
+      }
     }
-  }
+  );
+
+  // Register jules_list_sessions
+  server.tool(
+    "jules_list_sessions",
+    "List all Jules sessions",
+    {},
+    async () => {
+      try {
+        const https = await import('https');
+        return new Promise((resolve) => {
+          const req = https.request({
+            hostname: 'jules.googleapis.com',
+            port: 443,
+            path: '/v1alpha/sessions',
+            method: 'GET',
+            headers: {
+              'X-Goog-Api-Key': process.env.JULES_API_KEY || '',
+              'Content-Type': 'application/json'
+            }
+          }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+              resolve({
+                content: [{ type: "text" as const, text: data }]
+              });
+            });
+          });
+          req.on('error', (err) => {
+            resolve({
+              content: [{ type: "text" as const, text: `Error: ${err.message}` }],
+              isError: true
+            });
+          });
+          req.end();
+        });
+      } catch (error: any) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+          isError: true
+        };
+      }
+    }
+  );
 
   return server.server;
 }
-
-// ============ EXPRESS COMPATIBILITY LAYER ============
-// This allows the server to still run as a standalone Express app if needed
-
-const app = express();
-app.use(express.json());
-
-// CORS
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, Authorization');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
-
-// .well-known/mcp-config
-app.get('/.well-known/mcp-config', (req, res) => {
-  res.json({ sse: { endpoint: 'mcp/messages' } });
-});
-
-// Health check
-app.get(['/health', '/api/v1/health'], (req, res) => {
-  res.json({ status: 'ok', version: VERSION, timestamp: new Date().toISOString() });
-});
-
-// Start Express if running directly
-// if (import.meta.url === `file://${process.argv[1]}`) {
-//   app.listen(PORT, () => {
-//     console.log(`Express server running on port ${PORT}`);
-//   });
-// }
