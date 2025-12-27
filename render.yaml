@@ -1,7 +1,9 @@
 services:
   - type: web
     name: jules-orchestrator
-    runtime: docker
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
     region: oregon
     healthCheckPath: /api/v1/health
     envVars:
