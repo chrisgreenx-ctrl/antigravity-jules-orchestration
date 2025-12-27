@@ -1,7 +1,4 @@
-.smithery
-node_modules
 .env
-*.zim
-*.zip
+node_modules
 *.zim
 *.zip
