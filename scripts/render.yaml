@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: jules-orchestrator
+    runtime: docker
+    region: oregon
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: JULES_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
