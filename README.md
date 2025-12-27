@@ -1,5 +1,7 @@
 # Basic MCP Server
 
+[![smithery badge](https://smithery.ai/badge/chris/antigravity-jules-orchestration3)](https://smithery.ai/server/chris/antigravity-jules-orchestration3)
+
 A minimal Model Context Protocol (MCP) server demonstrating tools, resources, and prompts.
 
 Built with [Smithery SDK](https://smithery.ai/docs)
@@ -58,4 +60,3 @@ Ready to deploy? Push your code to GitHub and deploy to Smithery:
 
 - [Smithery Docs](https://smithery.ai/docs)
 - [MCP Protocol](https://modelcontextprotocol.io)
-
