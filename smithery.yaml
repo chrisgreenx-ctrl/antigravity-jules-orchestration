@@ -9,16 +9,24 @@ startCommand:
     properties:
       JULES_API_KEY:
         type: "string"
+        title: "Jules API Key"
         description: "Jules API Key for authentication"
       GITHUB_TOKEN:
         type: "string"
+        title: "GitHub Token"
         description: "GitHub Personal Access Token"
       PORT:
         type: "number"
+        title: "Port"
         description: "Server port"
+        default: 8081
       LOG_LEVEL:
         type: "string"
+        title: "Log Level"
         description: "Logging level (error, warn, info, debug)"
+        default: "info"
   exampleConfig:
     JULES_API_KEY: "your-jules-api-key"
+    GITHUB_TOKEN: "your-github-token"
     PORT: 8081
+    LOG_LEVEL: "info"
