@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3324;
 
 // Export config schema for Smithery to validate env vars
 export const configSchema = z.object({
-  JULES_API_KEY: z.string().describe("Jules API Key"),
+  JULES_API_KEY: z.string().optional().describe("Jules API Key"),
   GITHUB_TOKEN: z.string().optional().describe("GitHub Personal Access Token"),
   PORT: z.any().optional(),
   LOG_LEVEL: z.string().optional(),

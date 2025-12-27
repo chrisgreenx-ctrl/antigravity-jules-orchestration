@@ -25,7 +25,6 @@ startCommand:
       ALLOWED_ORIGINS:
         type: "string"
         description: "Comma-separated allowed CORS origins"
-    required: ["JULES_API_KEY"]
   exampleConfig:
     JULES_API_KEY: "your-jules-api-key"
     GITHUB_TOKEN: "your-github-token"
