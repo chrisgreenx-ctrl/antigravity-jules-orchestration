@@ -3,6 +3,5 @@ node_modules
 .env
 *.zim
 *.zip
-*
 *.zim
 *.zip

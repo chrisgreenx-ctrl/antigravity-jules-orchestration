@@ -6,9 +6,9 @@
 	"module": "src/index.ts",
 	"type": "module",
 	"scripts": {
-		"build": "npx smithery build",
+		"build": "smithery build",
 		"start": "node dist/index.js",
-		"dev": "npx smithery dev",
+		"dev": "smithery dev",
 		"test": "node --test tests/unit/*.test.js",
 		"test:unit": "node --test tests/unit/*.test.js",
 		"test:integration": "vitest run tests/integration",
@@ -34,6 +34,7 @@
 		"@octokit/rest": "^22.0.1",
 		"@smithery/sdk": "^3.0.1",
 		"axios": "^1.13.2",
+		"chalk": "^5.6.2",
 		"dotenv": "^16.3.1",
 		"express": "^4.18.2",
 		"hono": "^4.11.3",
@@ -46,6 +47,7 @@
 		"@types/express": "^5.0.6",
 		"@types/node": "^25.0.3",
 		"@vitejs/plugin-react": "^5.1.2",
+		"esbuild": "^0.27.2",
 		"tsx": "^4.21.0",
 		"typescript": "^5.9.3",
 		"vitest": "^1.6.1"
