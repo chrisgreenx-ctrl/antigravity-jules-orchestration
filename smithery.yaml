@@ -1,4 +1,24 @@
-runtime: "typescript"
+runtime: "container"
 build:
-  command: "npm run build"
-startCommand: node dist/index.cjs
+  dockerfile: "Dockerfile"
+  dockerBuildPath: "."
+startCommand:
+  type: "http"
+  configSchema:
+    type: "object"
+    properties:
+      JULES_API_KEY:
+        type: "string"
+        description: "Jules API Key for authentication"
+      GITHUB_TOKEN:
+        type: "string"
+        description: "GitHub Personal Access Token"
+      PORT:
+        type: "number"
+        description: "Server port"
+      LOG_LEVEL:
+        type: "string"
+        description: "Logging level (error, warn, info, debug)"
+  exampleConfig:
+    JULES_API_KEY: "your-jules-api-key"
+    PORT: 8081
