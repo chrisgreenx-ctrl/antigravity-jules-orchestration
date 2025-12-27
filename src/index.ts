@@ -1,4 +1,4 @@
-import { createStatelessServer } from '@smithery/sdk';
+import { createStatefulServer } from '@smithery/sdk';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import dotenv from 'dotenv';
@@ -142,10 +142,10 @@ function createMcpServer({ config }: { config: any }) {
 }
 
 // Use Smithery SDK to create the HTTP server (bypasses @smithery/cli)
-const statelessServer = createStatelessServer(createMcpServer, {
+const statefulServer = createStatefulServer(createMcpServer, {
   schema: configSchema
 });
-statelessServer.app.listen(process.env.PORT || 8081, () => {
+statefulServer.app.listen(process.env.PORT || 8081, () => {
   console.log(`> Server starting on port ${process.env.PORT || 8081}`);
   console.log(`> MCP endpoint available at /mcp`);
 });

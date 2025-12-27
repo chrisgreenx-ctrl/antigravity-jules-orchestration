@@ -72946,6 +72946,33 @@ var StreamableHTTPServerTransport = class {
 
 // node_modules/@smithery/sdk/dist/server/stateful.js
 var import_express = __toESM(require_express2(), 1);
+var import_node_crypto = require("node:crypto");
+
+// node_modules/@smithery/sdk/dist/server/session.js
+var createLRUStore = (max = 1e3) => {
+  const cache = /* @__PURE__ */ new Map();
+  return {
+    get: (id) => {
+      const t = cache.get(id);
+      if (!t)
+        return void 0;
+      cache.delete(id);
+      cache.set(id, t);
+      return t;
+    },
+    set: (id, transport) => {
+      if (cache.has(id)) {
+        cache.delete(id);
+      } else if (cache.size >= max) {
+        const [lruId, lruTransport] = cache.entries().next().value;
+        lruTransport.close?.();
+        cache.delete(lruId);
+      }
+      cache.set(id, transport);
+    },
+    delete: (id) => cache.delete(id)
+  };
+};
 
 // node_modules/chalk/source/vendor/ansi-styles/index.js
 var ANSI_BACKGROUND_OFFSET = 10;
@@ -73509,78 +73536,82 @@ ${source_default.dim(data)}`;
   };
 }
 
-// node_modules/@smithery/sdk/dist/server/stateless.js
-var import_express2 = __toESM(require_express2(), 1);
-function createStatelessServer(createMcpServer2, options) {
-  const app = options?.app ?? (0, import_express2.default)();
+// node_modules/@smithery/sdk/dist/server/stateful.js
+function createStatefulServer(createMcpServer2, options) {
+  const app = options?.app ?? (0, import_express.default)();
+  app.use("/mcp", import_express.default.json());
+  const sessionStore = options?.sessionStore ?? createLRUStore();
   const logger = createLogger(options?.logLevel ?? "info");
-  app.use("/mcp", import_express2.default.json());
   app.post("/mcp", async (req, res) => {
-    try {
-      logger.debug({
-        method: req.body.method,
-        id: req.body.id,
-        params: req.body.params
-      }, "MCP Request");
+    logger.debug({
+      method: req.body.method,
+      id: req.body.id,
+      sessionId: req.headers["mcp-session-id"]
+    }, "MCP Request");
+    const sessionId = req.headers["mcp-session-id"];
+    let transport;
+    if (sessionId && sessionStore.get(sessionId)) {
+      transport = sessionStore.get(sessionId);
+    } else if (!sessionId && isInitializeRequest(req.body)) {
+      const newSessionId = (0, import_node_crypto.randomUUID)();
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => newSessionId,
+        onsessioninitialized: (sessionId2) => {
+          sessionStore.set(sessionId2, transport);
+        }
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          sessionStore.delete?.(transport.sessionId);
+        }
+      };
       const configResult = parseAndValidateConfig(req, options?.schema);
       if (!configResult.ok) {
         const status = configResult.error.status || 400;
-        logger.error({ error: configResult.error }, "Config validation failed");
+        logger.error({ error: configResult.error, sessionId: newSessionId }, "Config validation failed");
         res.status(status).json(configResult.error);
         return;
       }
       const config2 = configResult.value;
-      const server = createMcpServer2({
-        config: config2,
-        auth: req.auth,
-        logger
-      });
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: void 0
-      });
-      res.on("close", () => {
-        transport.close();
-        server.close();
-      });
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-      logger.debug({
-        method: req.body.method,
-        id: req.body.id
-      }, "MCP Response sent");
-    } catch (error46) {
-      logger.error({ error: error46 }, "Error handling MCP request");
-      if (!res.headersSent) {
+      try {
+        logger.info({ sessionId: newSessionId }, "Creating new session");
+        const server = createMcpServer2({
+          sessionId: newSessionId,
+          config: config2,
+          auth: req.auth,
+          logger
+        });
+        await server.connect(transport);
+      } catch (error46) {
+        logger.error({ error: error46, sessionId: newSessionId }, "Error initializing server");
         res.status(500).json({
           jsonrpc: "2.0",
           error: {
             code: -32603,
-            message: "Internal server error"
+            message: "Error initializing server."
           },
           id: null
         });
+        return;
       }
+    } else {
+      logger.warn({ sessionId }, "Session not found or expired");
+      res.status(400).json({
+        jsonrpc: "2.0",
+        error: {
+          code: -32e3,
+          message: "Session not found or expired"
+        },
+        id: null
+      });
+      return;
     }
-  });
-  app.get("/mcp", async (_req, res) => {
-    res.status(405).json({
-      jsonrpc: "2.0",
-      error: {
-        code: -32e3,
-        message: "Method not allowed."
-      },
-      id: null
-    });
-  });
-  app.delete("/mcp", async (_req, res) => {
-    res.status(405).json({
-      jsonrpc: "2.0",
-      error: {
-        code: -32e3,
-        message: "Method not allowed."
-      },
-      id: null
-    });
+    await transport.handleRequest(req, res, req.body);
+    logger.debug({
+      method: req.body.method,
+      id: req.body.id,
+      sessionId: req.headers["mcp-session-id"]
+    }, "MCP Response sent");
   });
   app.get("/.well-known/mcp-config", (req, res) => {
     res.set("Content-Type", "application/schema+json; charset=utf-8");
@@ -73596,8 +73627,51 @@ function createStatelessServer(createMcpServer2, options) {
     };
     res.json(configSchema2);
   });
+  app.get("/mcp", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"];
+    if (!sessionId || !sessionStore.get(sessionId)) {
+      res.status(400).send("Invalid or expired session ID");
+      return;
+    }
+    const transport = sessionStore.get(sessionId);
+    await transport.handleRequest(req, res);
+  });
+  app.delete("/mcp", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"];
+    if (!sessionId) {
+      logger.warn("Session termination request missing session ID");
+      res.status(400).json({
+        jsonrpc: "2.0",
+        error: {
+          code: -32600,
+          message: "Missing mcp-session-id header"
+        },
+        id: null
+      });
+      return;
+    }
+    const transport = sessionStore.get(sessionId);
+    if (!transport) {
+      logger.warn({ sessionId }, "Session termination failed - not found");
+      res.status(404).json({
+        jsonrpc: "2.0",
+        error: {
+          code: -32e3,
+          message: "Session not found or expired"
+        },
+        id: null
+      });
+      return;
+    }
+    transport.close?.();
+    logger.info({ sessionId }, "Session terminated");
+    res.status(204).end();
+  });
   return { app };
 }
+
+// node_modules/@smithery/sdk/dist/server/stateless.js
+var import_express2 = __toESM(require_express2(), 1);
 
 // node_modules/@smithery/sdk/dist/server/auth/identity.js
 var import_express3 = __toESM(require_express2(), 1);
@@ -81793,10 +81867,10 @@ function createMcpServer({ config: config2 }) {
   );
   return server.server;
 }
-var statelessServer = createStatelessServer(createMcpServer, {
+var statefulServer = createStatefulServer(createMcpServer, {
   schema: configSchema
 });
-statelessServer.app.listen(process.env.PORT || 8081, () => {
+statefulServer.app.listen(process.env.PORT || 8081, () => {
   console.log(`> Server starting on port ${process.env.PORT || 8081}`);
   console.log(`> MCP endpoint available at /mcp`);
 });
