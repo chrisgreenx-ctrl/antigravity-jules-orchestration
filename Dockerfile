@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
+# Install latest npm
+RUN npm install -g npm@latest
+
 WORKDIR /app
 
 # Copy package files and install dependencies
